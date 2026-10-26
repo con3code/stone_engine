@@ -1,0 +1,86 @@
+/*
+STPageQueries.swift
+
+Part of the page layer added to stone_engine for SMSReader (see PAGE_LAYOUT.md). MIT License.
+
+Where the text of a page set by STTypesetter stands on it: for selecting, searching,
+outlining paragraphs, following links and reading ruby.
+*/
+
+import CoreGraphics
+import Foundation
+
+/// A character (or an image) on a page: where it is in its section's text and on the page.
+public struct STPlacedCharacter: Sendable, Hashable {
+    /// In the section's text, in UTF-16 units.
+    public let range: Range<Int>
+    /// Its em box on the page, in points with y going down.
+    public let rect: CGRect
+    /// The line among the page's lines, and the block among the section's blocks.
+    public let line: Int
+    public let block: Int
+    /// The link the character is part of.
+    public let link: String?
+    /// A forced line break, or a space: there in the text, nothing drawn.
+    public let isBlank: Bool
+}
+
+/// Ruby on a page: the base's text range and its reading.
+public struct STPlacedRuby: Sendable, Hashable {
+    public let range: Range<Int>
+    public let reading: String
+}
+
+extension STPage {
+    /// The page's characters, line by line in reading order; images on their own are included.
+    public func characters(geometry: STPageGeometry, writingMode: STWritingMode) -> [STPlacedCharacter] {
+        let mapper = STPageRenderer.Mapper(content: geometry.content, vertical: writingMode == .vertical)
+        var result: [STPlacedCharacter] = []
+        for (lineIndex, placed) in lines.enumerated() {
+            let line = placed.line
+            let set = line.block
+            let emStart = placed.blockPosition + line.emStart
+            for (offset, index) in line.items.enumerated() {
+                let item = set.items[index]
+                let rect = mapper.rect(
+                    inline: line.positions[offset] + item.startTrim, block: emStart,
+                    inlineSize: max(line.advances[offset], 0.5), blockSize: line.emSize)
+                let start = set.block.offset + item.range.lowerBound
+                result.append(STPlacedCharacter(
+                    range: start..<(set.block.offset + item.range.upperBound), rect: rect, line: lineIndex,
+                    block: set.index, link: item.style.link, isBlank: item.isLineBreak || item.isSpace))
+            }
+        }
+        for image in images {
+            let rect = mapper.rect(inline: image.inline, block: image.block, inlineSize: image.inlineSize, blockSize: image.blockSize)
+            result.append(STPlacedCharacter(
+                range: image.textOffset..<(image.textOffset + 1), rect: rect, line: -1, block: image.blockIndex, link: nil, isBlank: false))
+        }
+        return result
+    }
+
+    /// The ruby of the page's lines.
+    public var rubies: [STPlacedRuby] {
+        var result: [STPlacedRuby] = []
+        for placed in lines {
+            let set = placed.line.block
+            var seen = Set<Int>()
+            for index in placed.line.items {
+                guard let rubyIndex = set.items[index].ruby, seen.insert(rubyIndex).inserted else { continue }
+                let ruby = set.rubies[rubyIndex]
+                let first = set.items[ruby.items.lowerBound], last = set.items[ruby.items.upperBound - 1]
+                result.append(STPlacedRuby(
+                    range: (set.block.offset + first.range.lowerBound)..<(set.block.offset + last.range.upperBound),
+                    reading: ruby.text))
+            }
+        }
+        return result
+    }
+
+    /// The blocks the page shows part of, by their index in the section, in order.
+    public var blockIndices: [Int] {
+        var seen: [Int] = []
+        for placed in lines where seen.last != placed.line.block.index { seen.append(placed.line.block.index) }
+        return seen
+    }
+}
