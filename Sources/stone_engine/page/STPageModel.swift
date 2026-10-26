@@ -123,6 +123,9 @@ public struct STTextStyle: Sendable, Hashable {
     /// The language the text is in (BCP 47, as lang has it): its Han and Hangul set in that
     /// language's faces where it is Chinese or Korean; nil when unknown.
     public var language: String? = nil
+    /// The bidirectional isolates and embeddings the text is in (dir on an inline element,
+    /// bdi, bdo, unicode-bidi), outermost first.
+    public var bidi: [STBidiSpan] = []
     /// How opaque the run is (CSS opacity, as it comes down from the elements it is in).
     public var opacity: CGFloat = 1
     /// Emphasis marks on the under side (left in vertical lines) rather than the over side.
@@ -243,6 +246,9 @@ public struct STBlockStyle: Sendable, Hashable {
     public var lineBreak: STLineBreak? = nil
     public var breaksLongWords: Bool? = nil
     public var hyphenates = false
+    /// The paragraph's direction (CSS direction, dir): its lines start on the right where
+    /// it is right to left; auto takes it from its first strong letter (dir="auto").
+    public var direction: STTextDirection = .ltr
     public var language: String? = nil
     /// hanging-punctuation: an opening mark at the paragraph's start outside the line; 、。
     /// past its end (nil: as the reader chose).
@@ -636,6 +642,8 @@ public struct STTable: Sendable, Hashable {
     public var box: Int?
     /// The index after the last block of its cells.
     public var end: Int = 0
+    /// Its columns from the right (direction: rtl).
+    public var rightToLeft = false
 
     public init() {}
 }
@@ -672,4 +680,25 @@ public struct STFlow: Sendable, Hashable {
     public var end: Int = 0
 
     public init() {}
+}
+
+/// The direction text runs in: left to right, right to left, or as its first strong letter says.
+public enum STTextDirection: Sendable, Hashable {
+    case ltr, rtl, auto
+}
+
+/// Text set apart in its own direction inside a paragraph (an isolate: dir on an inline
+/// element, bdi, unicode-bidi: isolate; or an embedding), every letter of it taken as that
+/// direction's where it overrides (bdo, unicode-bidi: bidi-override).
+public struct STBidiSpan: Sendable, Hashable {
+    /// Tells one span from the next of the same kind.
+    public var id: Int
+    public var direction: STTextDirection
+    public var overrides: Bool
+
+    public init(id: Int, direction: STTextDirection, overrides: Bool = false) {
+        self.id = id
+        self.direction = direction
+        self.overrides = overrides
+    }
 }

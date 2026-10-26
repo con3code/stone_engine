@@ -13,9 +13,9 @@ import Foundation
 /// inside right-to-left text), and a line's items placed in the order those levels give
 /// (rule L2). What the algorithm does with explicit embeddings, isolates and right-to-left
 /// paragraphs is not done here.
-enum STBidi {
+public enum STBidi {
     /// The bidirectional classes the resolution tells apart.
-    enum Kind: Equatable {
+    public enum Kind: Equatable, Sendable {
         /// Strong left to right: Latin, kana, ideographs, most letters.
         case left
         /// Strong right to left: Hebrew, Arabic, Syriac, Thaana, N'Ko…
@@ -53,11 +53,14 @@ enum STBidi {
     /// Signs that go with the number beside them ("50%", "$3").
     private static let terminators: Set<UInt32> = [0x25, 0x24, 0x23, 0xB0, 0x2030, 0x20AC, 0xA3, 0xA5]
 
-    /// The embedding levels of a paragraph's items, by their kinds and first scalars; all 0
-    /// (and nothing to do) where there is no right-to-left text.
-    static func levels(kinds: [Kind], scalars: [UInt32]) -> [UInt8] {
+    /// The embedding levels of one sequence of a paragraph's items (the paragraph, or an
+    /// isolate in it), by their kinds and first scalars, at the sequence's own level `base`
+    /// (0 left to right, 1 right to left, higher inside isolates): W4, W5, W7, N0, N1, N2,
+    /// I1, I2. All `base` (and nothing to do) where the sequence is all of its direction.
+    public static func levels(kinds: [Kind], scalars: [UInt32], base: UInt8 = 0) -> [UInt8] {
         let count = kinds.count
-        guard kinds.contains(where: { $0 == .right || $0 == .arabic }) else { return [UInt8](repeating: 0, count: count) }
+        let embedding: Kind = base % 2 == 1 ? .right : .left
+        if base % 2 == 0, !kinds.contains(where: { $0 == .right || $0 == .arabic }) { return [UInt8](repeating: base, count: count) }
         var types = kinds
         // W4: one separator between two numbers of a kind is part of them.
         if count >= 3 {
@@ -69,8 +72,9 @@ enum STBidi {
         for i in types.indices where types[i] == .neutral && terminators.contains(scalars[i]) {
             if (i > 0 && types[i - 1] == .european) || (i + 1 < count && types[i + 1] == .european) { types[i] = .european }
         }
-        // W7: European digits after left-to-right text (or at the start) are left to right.
-        var lastStrong = Kind.left
+        // W7: European digits after left-to-right text (or at the start of a left-to-right
+        // sequence) are left to right.
+        var lastStrong = embedding
         for i in types.indices {
             switch types[i] {
             case .left, .right: lastStrong = types[i]
@@ -85,9 +89,9 @@ enum STBidi {
             case .neutral: nil
             }
         }
-        // N0: a pair of brackets takes the direction of what is inside it where that is the
-        // paragraph's (left to right); where only right-to-left text is inside, that of the
-        // text before it. "(3.14)" after Hebrew stays one pair, seen the right way round.
+        // N0: a pair of brackets takes the sequence's direction where what is inside it is of
+        // that direction; where only the other is inside, that of the text before it, if it
+        // is the other too. "(3.14)" after Hebrew stays one pair, seen the right way round.
         var stack: [(index: Int, closing: UInt32)] = []
         var pairs: [(open: Int, close: Int)] = []
         for i in types.indices where types[i] == .neutral {
@@ -99,14 +103,15 @@ enum STBidi {
                 stack.removeSubrange(found...)
             }
         }
+        let opposite: Kind = embedding == .left ? .right : .left
         for pair in pairs.sorted(by: { $0.open < $1.open }) {
             let inside = types[(pair.open + 1)..<pair.close].compactMap(direction)
             let resolved: Kind?
-            if inside.contains(.left) {
-                resolved = .left
-            } else if inside.contains(.right) {
-                let before = types[..<pair.open].reversed().lazy.compactMap(direction).first ?? .left
-                resolved = before == .right ? .right : .left
+            if inside.contains(embedding) {
+                resolved = embedding
+            } else if inside.contains(opposite) {
+                let before = types[..<pair.open].reversed().lazy.compactMap(direction).first ?? embedding
+                resolved = before == opposite ? opposite : embedding
             } else {
                 resolved = nil
             }
@@ -116,7 +121,7 @@ enum STBidi {
             }
         }
         // N1, N2: neutrals between text of one direction take it (numbers count as right
-        // to left); else the paragraph's (left to right). The paragraph's ends are left to right.
+        // to left); else the sequence's. Its ends are of the sequence's direction.
         var i = 0
         while i < count {
             guard types[i] == .neutral else {
@@ -125,25 +130,45 @@ enum STBidi {
             }
             var end = i
             while end < count, types[end] == .neutral { end += 1 }
-            let before = i > 0 ? direction(types[i - 1]) ?? .left : .left
-            let after = end < count ? direction(types[end]) ?? .left : .left
-            let resolved: Kind = before == after ? before : .left
+            let before = i > 0 ? direction(types[i - 1]) ?? embedding : embedding
+            let after = end < count ? direction(types[end]) ?? embedding : embedding
+            let resolved: Kind = before == after ? before : embedding
             for j in i..<end { types[j] = resolved }
             i = end
         }
-        // I1: right to left at 1, numbers at 2 (inside right-to-left text, read left to right).
+        // I1, I2: at an even level right to left one up, numbers two; at an odd one, left to
+        // right and numbers one up.
         return types.map { kind in
-            switch kind {
-            case .left, .neutral: 0
-            case .right: 1
-            case .european, .arabic: 2
+            if base % 2 == 0 {
+                switch kind {
+                case .left, .neutral: base
+                case .right: base + 1
+                case .european, .arabic: base + 2
+                }
+            } else {
+                switch kind {
+                case .right, .neutral: base
+                case .left, .european, .arabic: base + 1
+                }
             }
         }
     }
 
+    /// The direction a stretch of text says by its first strong letter (P2, P3); nil where it has none.
+    static func firstStrong(_ kinds: [Kind]) -> STTextDirection? {
+        for kind in kinds {
+            switch kind {
+            case .left: return .ltr
+            case .right: return .rtl
+            default: continue
+            }
+        }
+        return nil
+    }
+
     /// The order a line's items are seen in, left to right along the line, by their levels
     /// (L2: each run at or above a level reversed, from the highest down to 1).
-    static func visualOrder(_ levels: [UInt8]) -> [Int] {
+    public static func visualOrder(_ levels: [UInt8]) -> [Int] {
         var order = Array(levels.indices)
         guard let highest = levels.max(), highest > 0 else { return order }
         for level in stride(from: highest, through: 1, by: -1) {

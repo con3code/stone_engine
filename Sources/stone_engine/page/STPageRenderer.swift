@@ -187,6 +187,15 @@ public enum STPageRenderer {
             let firstItem = set.items[firstIndex], lastItem = set.items[lastIndex]
             var start = line.positions[span.first] + firstItem.startTrim
             var end = line.positions[span.last] + lastItem.startTrim + line.advances[span.last]
+            // Right-to-left text (STBidi) puts the box's characters otherwise along the line:
+            // it takes in the room they take, whichever end they are at.
+            if set.baseLevel > 0 || set.items[firstIndex...lastIndex].contains(where: { $0.level > 0 }) {
+                let rooms = (span.first...span.last).map { offset in
+                    (line.positions[offset] + set.items[line.items.lowerBound + offset].startTrim, line.advances[offset])
+                }
+                start = rooms.map(\.0).min() ?? start
+                end = rooms.map { $0.0 + $0.1 }.max() ?? end
+            }
             // The room of the boxes about this one that start or end at the same character is
             // theirs: this one begins after it and ends before it (a white span at the end of a
             // padded violet one leaves the violet's padding violet).

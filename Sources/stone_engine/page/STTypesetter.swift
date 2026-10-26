@@ -87,6 +87,8 @@ final class STSetBlock: @unchecked Sendable {
     var hyphens = Set<Int>()
     /// Set down a vertical line.
     var vertical = false
+    /// The paragraph's embedding level: 1 where it runs right to left.
+    var baseLevel: UInt8 = 0
 
     init(block: STBlock, index: Int) {
         self.block = block
@@ -457,11 +459,12 @@ public final class STTypesetter {
         }
     }
 
-    /// The items' embedding levels where the block has right-to-left text in it, and the
-    /// brackets of right-to-left text drawn mirrored.
+    /// The items' embedding levels (STBidi) where the block has right-to-left text in it, runs
+    /// right to left, or sets text apart in a direction of its own (dir, bdi, bdo); and the
+    /// brackets of right-to-left text drawn mirrored. An isolate is a sequence of its own,
+    /// one neutral in the one about it.
     private func resolveDirections(_ set: STSetBlock) {
         let items = set.items
-        guard items.contains(where: { STBidi.isRightToLeft($0.scalar) }) else { return }
         let kinds = items.map { item -> STBidi.Kind in
             switch item.kind {
             case .glyphs: STBidi.kind(of: item.scalar)
@@ -469,13 +472,57 @@ public final class STTypesetter {
             case .image, .lineBreak: .neutral
             }
         }
-        let levels = STBidi.levels(kinds: kinds, scalars: items.map(\.scalar))
+        let direction = set.block.style.direction
+        let spans = items.contains { !$0.style.bidi.isEmpty }
+        guard direction != .ltr || spans || items.contains(where: { STBidi.isRightToLeft($0.scalar) }) else { return }
+        var levels = [UInt8](repeating: 0, count: items.count)
+        func outside(_ indices: [Int], depth: Int) -> [STBidi.Kind] {
+            indices.filter { items[$0].style.bidi.count <= depth }.map { kinds[$0] }
+        }
+        func resolve(_ indices: [Int], level: UInt8, override: STBidi.Kind?, depth: Int) {
+            // The sequence: its own items, each isolate in it as one neutral.
+            var sequence: [(kind: STBidi.Kind, scalar: UInt32, own: Int?)] = []
+            var isolates: [(span: STBidiSpan, indices: [Int])] = []
+            for index in indices {
+                let nested = items[index].style.bidi
+                if nested.count > depth {
+                    let span = nested[depth]
+                    if let last = isolates.last, last.span == span, sequence.last?.own == nil {
+                        isolates[isolates.count - 1].indices.append(index)
+                    } else {
+                        isolates.append((span, [index]))
+                        sequence.append((.neutral, 0xFFFC, nil))
+                    }
+                } else {
+                    sequence.append((override ?? kinds[index], items[index].scalar, index))
+                }
+            }
+            let resolved = STBidi.levels(kinds: sequence.map(\.kind), scalars: sequence.map(\.scalar), base: level)
+            for (place, entry) in sequence.enumerated() {
+                if let own = entry.own { levels[own] = resolved[place] }
+            }
+            for isolate in isolates {
+                let own = isolate.span.direction == .auto
+                    ? (STBidi.firstStrong(isolate.indices.map { kinds[$0] }) ?? .ltr) : isolate.span.direction
+                let inner: UInt8 = own == .rtl ? (level % 2 == 0 ? level + 1 : level + 2) : (level % 2 == 0 ? level + 2 : level + 1)
+                guard inner <= 125 else { continue }
+                resolve(isolate.indices, level: inner, override: isolate.span.overrides ? (own == .rtl ? .right : .left) : nil, depth: depth + 1)
+            }
+        }
+        let all = Array(items.indices)
+        let base: UInt8
+        switch direction {
+        case .ltr: base = 0
+        case .rtl: base = 1
+        case .auto: base = STBidi.firstStrong(outside(all, depth: 0)) == .rtl ? 1 : 0
+        }
+        set.baseLevel = base
+        resolve(all, level: base, override: nil, depth: 0)
         for index in items.indices {
             set.items[index].level = levels[index]
             guard levels[index] % 2 == 1, case .glyphs = items[index].kind, let mirror = STBidi.mirror(items[index].scalar),
                   let scalar = Unicode.Scalar(mirror), !(set.vertical && !items[index].sideways) else { continue }
-            let shape = fonts.shape(String(Character(scalar)), items[index].style, vertical: false)
-            set.items[index].shape = shape
+            set.items[index].shape = fonts.shape(String(Character(scalar)), items[index].style, vertical: false)
         }
     }
 
@@ -832,40 +879,52 @@ public final class STTypesetter {
             position += advances[i] + extra[i]
             advances[i] += extra[i]
         }
-        if items.contains(where: { $0.level > 0 }) {
-            positions = Self.reordered(items, positions: positions, advances: advances, trailing: trailing, markers: markerCount)
+        if set.baseLevel > 0 || items.contains(where: { $0.level > 0 }) {
+            positions = Self.reordered(items, positions: positions, advances: advances, trailing: trailing, markers: markerCount,
+                                       base: set.baseLevel, lineStart: inlineStart, measure: measure)
         }
         return (positions, advances)
     }
 
-    /// The line's items placed in the order they are seen (STBidi): each run of right-to-left
-    /// text takes the room it took, its items from the other end. Spaces at the line's end
-    /// stay at its end (L1); a list's marker stays where it is.
-    static func reordered(_ items: [STItem], positions: [CGFloat], advances: [CGFloat], trailing: Int, markers: Int) -> [CGFloat] {
-        var levels = items.map(\.level)
-        for i in levels.indices where i >= trailing || i < markers { levels[i] = 0 }
+    /// The line's items placed in the order they are seen (STBidi, L1 and L2), from the line
+    /// set as if it ran left to right: a right-to-left paragraph's line turned about the
+    /// middle of its room (its start, indent and alignment on the right, its marker outside
+    /// on the right), then each run at a higher level turned within the room it takes. Spaces
+    /// at the line's end are at the paragraph's level, and stay at its end.
+    static func reordered(_ items: [STItem], positions: [CGFloat], advances: [CGFloat], trailing: Int, markers: Int,
+                          base: UInt8, lineStart: CGFloat, measure: CGFloat) -> [CGFloat] {
         let count = items.count
-        // The room each item takes up to the next one's start (the space justified after it with it).
-        let widths = (0..<count).map { i in i + 1 < count ? positions[i + 1] + items[i + 1].startTrim - positions[i] - items[i].startTrim : advances[i] }
-        let order = STBidi.visualOrder(levels)
-        var result = positions
-        var i = 0
-        while i < count {
-            guard levels[i] > 0 else {
-                i += 1
-                continue
-            }
-            var end = i
-            while end < count, levels[end] > 0 { end += 1 }
-            // The order's run here holds the same items, reversed in its levels.
-            var position = positions[i] + items[i].startTrim
-            for index in order[i..<end] {
-                result[index] = position - items[index].startTrim
-                position += widths[index]
-            }
-            i = end
+        var levels = items.map(\.level)
+        for i in levels.indices where i >= trailing || i < markers { levels[i] = base }
+        // Where each item's room starts along the line.
+        var starts = (0..<count).map { positions[$0] + items[$0].startTrim }
+        if base % 2 == 1 {
+            for i in 0..<count { starts[i] = lineStart * 2 + measure - starts[i] - advances[i] }
         }
-        return result
+        guard let highest = levels.max() else { return positions }
+        let lowest = base % 2 == 1 ? base + 1 : max(1, base)
+        if highest >= lowest {
+            for level in stride(from: highest, through: lowest, by: -1) {
+                var i = markers
+                while i < count {
+                    guard levels[i] >= level else {
+                        i += 1
+                        continue
+                    }
+                    var end = i
+                    while end < count, levels[end] >= level { end += 1 }
+                    // The run's items, as they are seen now, put the other way round in the same room.
+                    let seen = (i..<end).sorted { starts[$0] < starts[$1] }
+                    var position = seen.map { starts[$0] }.min() ?? 0
+                    for index in seen.reversed() {
+                        starts[index] = position
+                        position += advances[index]
+                    }
+                    i = end
+                }
+            }
+        }
+        return (0..<count).map { starts[$0] - items[$0].startTrim }
     }
 
     /// The lines of a block where each may be shortened (beside a float): `room(line)` gives
@@ -1250,7 +1309,8 @@ public final class STTypesetter {
                 }
             }
             let tableInline = lengths.reduce(0, +) + gaps
-            let tableStart = style.marginStart + (style.align == .center ? max(0, (available - tableInline) / 2) : 0)
+            let tableStart = style.marginStart + (style.align == .center ? max(0, (available - tableInline) / 2)
+                : table.rightToLeft ? max(0, available - tableInline) : 0)
             carry(style.marginBefore)
             beginContent()
             // The table's own box, about its rows.
@@ -1280,7 +1340,9 @@ public final class STTypesetter {
                     let span = min(max(1, cell.span), columns - column)
                     let length = lengths[column..<(column + span)].reduce(0, +) + spacing * CGFloat(span - 1)
                     let box = section.boxes[cell.box]
-                    let contentStart = inline + box.paddingStart
+                    // A right-to-left table's first column on the right.
+                    let cellInline = table.rightToLeft ? tableStart * 2 + tableInline - inline - length : inline
+                    let contentStart = cellInline + box.paddingStart
                     let measure = max(1, length - box.paddingStart - box.paddingEnd)
                     var placed: [(STLine, CGFloat)] = []
                     var height: CGFloat = 0
@@ -1301,7 +1363,7 @@ public final class STTypesetter {
                             continue
                         }
                     }
-                    cells.append((cell, inline, length, placed, height))
+                    cells.append((cell, cellInline, length, placed, height))
                     inline += length + spacing
                     column += span
                 }
