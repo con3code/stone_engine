@@ -120,6 +120,9 @@ public struct STTextStyle: Sendable, Hashable {
     public var baselineShift: CGFloat = 0
     /// A link the run is part of, by what the caller makes of it.
     public var link: String? = nil
+    /// The language the text is in (BCP 47, as lang has it): its Han and Hangul set in that
+    /// language's faces where it is Chinese or Korean; nil when unknown.
+    public var language: String? = nil
     /// How opaque the run is (CSS opacity, as it comes down from the elements it is in).
     public var opacity: CGFloat = 1
     /// Emphasis marks on the under side (left in vertical lines) rather than the over side.
@@ -441,6 +444,11 @@ public struct STReaderSettings: Sendable, Hashable {
     public var kinsoku = true
     /// 、。 may stand past the line's end (ぶら下げ) rather than be pushed to the next line.
     public var hangsPunctuation = true
+    /// 縦中横 the reader asks for where the book gives none: in a vertical line of mixed
+    /// orientation, a run of up to this many ASCII digits standing apart (not part of a word,
+    /// a decimal or a time), and one or two of ! and ?, set upright side by side in one
+    /// character's space. 0: only what the book says (text-combine-upright).
+    public var combinesDigits = 0
     /// The text's colour where the book sets none, and the page's.
     public var textColor: STColor = .black
     public var background: STColor = .white

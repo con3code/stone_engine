@@ -47,6 +47,11 @@
 - **約物と行分け**: 行頭・行末・隣接の約物の詰め（text-spacing の space-first・trim-start・allow-end ほか）、和欧間・和数間の四分アキ、word-break（keep-all・break-all）、line-break（loose・normal・strict・anywhere）、長い単語を分けるか（overflow-wrap）、欧文のハイフネーション、行頭の始め括弧と行末の句読点のぶら下げ。
 - **ルビ（追加）**: 下側のルビ、両側ルビ、ルビの揃え（start・center・space-between・space-around）、3 字以上のグループルビの行分け、圏点の位置（over・under）と約物には付けないこと、ルビの外側の圏点。
 - **線（追加）**: 線の種類（実線・二重線・点線・破線・波線）と色、縦組みの傍線の左右（text-underline-position）、文字ごとの位置。
+- **言語と方向**（`STBidi.swift`）
+  - 右から左の文字（ヘブライ語・アラビア語など）は単語ごとに CoreText で組み（アラビア文字はつながる）、段落の中で Unicode の双方向アルゴリズム（UAX #9）の主な規則（W4・W5・W7・N0・N1・N2・I1・L1・L2）で段位を決め、行ごとに見える順に並べる。右から左の中の括弧は左右を反転して描く。段落の基本方向は左から右に限る（`dir`・埋め込み・isolate は扱わない）。
+  - 単語の間に空白を置かない文字（タイ語・ラオ語・クメール語・ミャンマー語）は、システムの辞書で単語に分け、その間で改行できる。
+  - 書式の `language`（lang）が中国語・韓国語のとき、漢字とハングルをその言語の書体（PingFang SC / TC / HK、宋体があればそれ、Apple SD Gothic Neo）で組む。
+- **縦中横（読み手の指定）**: `STReaderSettings.combinesDigits` で、本が指定していない縦組みの半角数字（指定の桁数まで）と !? を縦中横にする。
 - **画像（追加）**: object-fit・object-position、合成モード、不透明度（opacity は文字・背景・画像の透明度として）。
 
 ## 使い方

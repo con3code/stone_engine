@@ -48,6 +48,11 @@ struct STItem: @unchecked Sendable {
     /// Room for inline boxes' padding and borders before and after its glyphs.
     var boxLead: CGFloat = 0
     var boxTrail: CGFloat = 0
+    /// Its embedding level among right-to-left text (STBidi): 0 left to right, 1 right to
+    /// left, 2 a number inside right-to-left text.
+    var level: UInt8 = 0
+    /// A word starts with it in a script written without spaces (Thai): a line may break before it.
+    var wordStart = false
 
     var squeezedAdvance: CGFloat { advance - startTrim - endTrim }
 
@@ -230,12 +235,7 @@ public final class STTypesetter {
             case .ruby(let base, let ruby, let style):
                 appendRuby(base: base, ruby: ruby, style: style, at: position, vertical: vertical, to: set)
             case .combined(let text, let style):
-                let shape = fonts.shape(text, style, vertical: false)
-                let scalar = text.unicodeScalars.first ?? " "
-                set.items.append(STItem(
-                    kind: vertical ? .combined(shape) : .glyphs, shape: shape, style: style, range: position..<(position + length),
-                    characterClass: STCharacterClass.of(scalar: scalar), sideways: false,
-                    advance: vertical ? style.size : shape.advance + style.letterSpacing, scalar: scalar.value))
+                appendCombined(text, style: style, at: position, vertical: vertical, to: set)
             case .image(let id, let size, let style):
                 appendImage(id, size: size, style: style, at: position, vertical: vertical, to: set)
             case .lineBreak(let style):
@@ -245,6 +245,7 @@ public final class STTypesetter {
             }
             position += length
         }
+        resolveDirections(set)
         if settings.squeezesPunctuation, block.style.trimsAdjacent { squeeze(set) }
         autospace(set)
         spreadRubies(set)
@@ -371,6 +372,13 @@ public final class STTypesetter {
         }
         /// Latin text (letters, digits and the punctuation among them), set across or turned
         /// in a vertical line: shaped a word at a time, for its kerning and ligatures.
+        func isRightToLeftLetter(_ character: Character) -> Bool {
+            guard let scalar = character.unicodeScalars.first?.value else { return false }
+            return STBidi.kind(of: scalar) == .right
+        }
+        func unspacedScript(_ character: Character) -> String? {
+            character.unicodeScalars.first.flatMap { STBidi.unspacedScript($0.value) }
+        }
         func isLatin(_ character: Character) -> Bool {
             guard let scalar = character.unicodeScalars.first?.value, scalar < 0x2000 else { return false }
             let characterClass = STCharacterClass.of(character)
@@ -378,18 +386,49 @@ public final class STTypesetter {
         }
         var index = 0
         while index < characters.count {
-            if isLatin(characters[index]), style.letterSpacing == 0 {
+            if vertical, style.orientation == .mixed, let end = combinableRun(characters, at: index) {
+                // 縦中横 the reader asks for (combinesDigits).
+                let run = String(characters[index..<end])
+                appendCombined(run, style: style, at: position, vertical: true, to: set)
+                position += run.utf16.count
+                index = end
+                continue
+            }
+            let rightToLeft = isRightToLeftLetter(characters[index])
+            // Right-to-left letters are joined (Arabic) and set as words whatever the letter
+            // spacing; a word is of one direction, and of one script written without spaces.
+            if isLatin(characters[index]), style.letterSpacing == 0 || rightToLeft {
+                let unspaced = unspacedScript(characters[index])
                 var end = index + 1
-                while end < characters.count, isLatin(characters[end]) { end += 1 }
+                while end < characters.count, isLatin(characters[end]),
+                      isRightToLeftLetter(characters[end]) == rightToLeft, unspacedScript(characters[end]) == unspaced { end += 1 }
                 let word = String(characters[index..<end])
-                if end - index >= 2, let clusters = fonts.shapeWord(word, style) {
-                    for (range, shape) in clusters {
+                // Thai and the like: the words the system finds, a line breaking between them.
+                let starts = unspaced.map { STBidi.wordStarts(word, locale: style.language ?? $0) } ?? []
+                let pieces = zip([0] + starts, starts + [word.utf16.count]).map { ($0, $1) }
+                var shapedAll = true
+                var shaped: [(range: Range<Int>, shape: STShape, wordStart: Bool)] = []
+                for (lower, upper) in pieces where upper > lower {
+                    let piece = (word as NSString).substring(with: NSRange(location: lower, length: upper - lower))
+                    if (piece as NSString).length >= 2 || rightToLeft || unspaced != nil, let clusters = fonts.shapeWord(piece, style) {
+                        for (number, cluster) in clusters.enumerated() {
+                            shaped.append(((lower + cluster.range.lowerBound)..<(lower + cluster.range.upperBound), cluster.shape, number == 0 && lower > 0))
+                        }
+                    } else {
+                        shapedAll = false
+                        break
+                    }
+                }
+                if shapedAll, !shaped.isEmpty {
+                    for (range, shape, wordStart) in shaped {
                         let cluster = (word as NSString).substring(with: NSRange(location: range.lowerBound, length: range.count))
                         let first = cluster.first ?? " "
-                        set.items.append(STItem(
+                        var item = STItem(
                             kind: .glyphs, shape: shape, style: style, range: (position + range.lowerBound)..<(position + range.upperBound),
                             characterClass: STCharacterClass.of(first), sideways: vertical, advance: shape.advance,
-                            scalar: first.unicodeScalars.first?.value ?? 0))
+                            scalar: first.unicodeScalars.first?.value ?? 0)
+                        item.wordStart = wordStart
+                        set.items.append(item)
                     }
                     position += word.utf16.count
                     index = end
@@ -416,6 +455,70 @@ public final class STTypesetter {
                 scalar: character.unicodeScalars.first?.value ?? 0))
             position += length
         }
+    }
+
+    /// The items' embedding levels where the block has right-to-left text in it, and the
+    /// brackets of right-to-left text drawn mirrored.
+    private func resolveDirections(_ set: STSetBlock) {
+        let items = set.items
+        guard items.contains(where: { STBidi.isRightToLeft($0.scalar) }) else { return }
+        let kinds = items.map { item -> STBidi.Kind in
+            switch item.kind {
+            case .glyphs: STBidi.kind(of: item.scalar)
+            case .combined: .left
+            case .image, .lineBreak: .neutral
+            }
+        }
+        let levels = STBidi.levels(kinds: kinds, scalars: items.map(\.scalar))
+        for index in items.indices {
+            set.items[index].level = levels[index]
+            guard levels[index] % 2 == 1, case .glyphs = items[index].kind, let mirror = STBidi.mirror(items[index].scalar),
+                  let scalar = Unicode.Scalar(mirror), !(set.vertical && !items[index].sideways) else { continue }
+            let shape = fonts.shape(String(Character(scalar)), items[index].style, vertical: false)
+            set.items[index].shape = shape
+        }
+    }
+
+    /// Characters set side by side in the space of one (縦中横), upright in a vertical line;
+    /// across, as they are.
+    private func appendCombined(_ text: String, style: STTextStyle, at position: Int, vertical: Bool, to set: STSetBlock) {
+        let shape = fonts.shape(text, style, vertical: false)
+        let scalar = text.unicodeScalars.first ?? " "
+        set.items.append(STItem(
+            kind: vertical ? .combined(shape) : .glyphs, shape: shape, style: style, range: position..<(position + text.utf16.count),
+            characterClass: STCharacterClass.of(scalar: scalar), sideways: false,
+            advance: vertical ? style.size : shape.advance + style.letterSpacing, scalar: scalar.value))
+    }
+
+    /// Where a run the reader sets as 縦中横 (`combinesDigits`) that starts at `index` ends:
+    /// up to that many ASCII digits, or one or two of ! and ?, with nothing on either side
+    /// that would make them part of something longer (a word, "3.14", "10:30", "MP3").
+    func combinableRun(_ characters: [Character], at index: Int) -> Int? {
+        let limit = settings.combinesDigits
+        guard limit > 0 else { return nil }
+        func isDigit(_ character: Character) -> Bool { character.isASCII && character.isNumber }
+        func isMark(_ character: Character) -> Bool { character == "!" || character == "?" }
+        func joins(_ character: Character) -> Bool {
+            character.isASCII && (character.isLetter || character.isNumber || isMark(character) || ".,:;/%+-_'&#@$".contains(character))
+        }
+        let first = characters[index]
+        let belongs: (Character) -> Bool
+        let most: Int
+        if isDigit(first) {
+            belongs = isDigit
+            most = limit
+        } else if isMark(first) {
+            belongs = isMark
+            most = 2
+        } else {
+            return nil
+        }
+        if index > 0, joins(characters[index - 1]) { return nil }
+        var end = index + 1
+        while end < characters.count, belongs(characters[end]) { end += 1 }
+        guard end - index <= most else { return nil }
+        if end < characters.count, joins(characters[end]) { return nil }
+        return end
     }
 
     /// 和欧間: a quarter em between Japanese and Latin letters (or digits), where the block asks
@@ -478,6 +581,8 @@ public final class STTypesetter {
         if after.isSpace { return false }
         if before.isSpace { return true }
         if style.lineBreak == .anywhere { return true }
+        // Between two words of Thai and the like, which no space parts.
+        if after.wordStart { return true }
         if settings.kinsoku {
             var notStarting = after.characterClass.notStarting
             switch style.lineBreak {
@@ -727,7 +832,40 @@ public final class STTypesetter {
             position += advances[i] + extra[i]
             advances[i] += extra[i]
         }
+        if items.contains(where: { $0.level > 0 }) {
+            positions = Self.reordered(items, positions: positions, advances: advances, trailing: trailing, markers: markerCount)
+        }
         return (positions, advances)
+    }
+
+    /// The line's items placed in the order they are seen (STBidi): each run of right-to-left
+    /// text takes the room it took, its items from the other end. Spaces at the line's end
+    /// stay at its end (L1); a list's marker stays where it is.
+    static func reordered(_ items: [STItem], positions: [CGFloat], advances: [CGFloat], trailing: Int, markers: Int) -> [CGFloat] {
+        var levels = items.map(\.level)
+        for i in levels.indices where i >= trailing || i < markers { levels[i] = 0 }
+        let count = items.count
+        // The room each item takes up to the next one's start (the space justified after it with it).
+        let widths = (0..<count).map { i in i + 1 < count ? positions[i + 1] + items[i + 1].startTrim - positions[i] - items[i].startTrim : advances[i] }
+        let order = STBidi.visualOrder(levels)
+        var result = positions
+        var i = 0
+        while i < count {
+            guard levels[i] > 0 else {
+                i += 1
+                continue
+            }
+            var end = i
+            while end < count, levels[end] > 0 { end += 1 }
+            // The order's run here holds the same items, reversed in its levels.
+            var position = positions[i] + items[i].startTrim
+            for index in order[i..<end] {
+                result[index] = position - items[index].startTrim
+                position += widths[index]
+            }
+            i = end
+        }
+        return result
     }
 
     /// The lines of a block where each may be shortened (beside a float): `room(line)` gives

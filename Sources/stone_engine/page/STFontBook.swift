@@ -86,8 +86,12 @@ final class STFontBook {
         }
         func resolve(_ family: STFontFamily) -> FontKey {
             switch family {
-            case .mincho: return reader(settings.minchoFonts, italics: settings.minchoItalicFonts)
-            case .gothic: return reader(settings.gothicFonts, italics: settings.gothicItalicFonts)
+            case .mincho:
+                if wide, let faces = languageFaces(serif: true, language: style.language, scalar: scalar) { return reader(faces, italics: []) }
+                return reader(settings.minchoFonts, italics: settings.minchoItalicFonts)
+            case .gothic:
+                if wide, let faces = languageFaces(serif: false, language: style.language, scalar: scalar) { return reader(faces, italics: []) }
+                return reader(settings.gothicFonts, italics: settings.gothicItalicFonts)
             case .monospace: return reader(settings.monospaceFonts, italics: settings.monospaceItalicFonts)
             case .named(let name):
                 guard exists(name) else { return resolve(.mincho) }
@@ -104,6 +108,33 @@ final class STFontBook {
             }
         }
         return resolve(family)
+    }
+
+    /// The faces (regular, bold) for Han and Hangul in Chinese and Korean text, whose
+    /// characters take shapes of their own there (骨, 直 are drawn otherwise than in Japanese):
+    /// simplified Chinese, traditional (Taiwan; Hong Kong and Macao), Korean. The serif ones
+    /// where the system has them, else the sans-serif ones; nil for any other language.
+    private func languageFaces(serif: Bool, language: String?, scalar: UInt32) -> [String]? {
+        guard let language = language?.lowercased(), language.hasPrefix("zh") || language.hasPrefix("ko") else { return nil }
+        let parts = language.split(separator: "-").map(String.init)
+        let candidates: [[String]]
+        if parts.first == "ko" {
+            // Hangul and Han only: Korean faces' brackets and points are not set full width.
+            let hangul = (0x3130...0x318F).contains(scalar) || (0xA960...0xA97F).contains(scalar) || (0xAC00...0xD7FF).contains(scalar)
+            let han = (0x3400...0x9FFF).contains(scalar) || (0xF900...0xFAFF).contains(scalar) || scalar >= 0x20000
+            guard hangul || han else { return nil }
+            candidates = (serif ? [["AppleMyungjo", "AppleMyungjo"]] : []) + [["AppleSDGothicNeo-Regular", "AppleSDGothicNeo-Bold"]]
+        } else if parts.first == "zh" {
+            let hongKong = parts.contains("hk") || parts.contains("mo")
+            let traditional = hongKong || parts.contains("hant") || parts.contains("tw")
+            let sans = hongKong ? ["PingFangHK-Regular", "PingFangHK-Semibold"]
+                : traditional ? ["PingFangTC-Regular", "PingFangTC-Semibold"] : ["PingFangSC-Regular", "PingFangSC-Semibold"]
+            let song = traditional ? ["STSongti-TC-Regular", "STSongti-TC-Bold"] : ["STSongti-SC-Regular", "STSongti-SC-Bold"]
+            candidates = (serif ? [song] : []) + [sans]
+        } else {
+            return nil
+        }
+        return candidates.first { exists($0[0]) }
     }
 
     /// The font a style sets text in.
@@ -224,17 +255,24 @@ final class STFontBook {
         guard !glyphs.isEmpty else { return nil }
         let length = (text as NSString).length
         let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
-        // Clusters: the glyphs from one string index to the next.
-        let starts = Array(Set(glyphs.map(\.index))).sorted()
+        // Clusters: the glyphs from one character (grapheme) a glyph stands for to the next,
+        // a ligature's characters with it, a mark with its letter. Each is as wide as the space
+        // from where it starts to where the next one along the line starts, wherever that
+        // one stands in the text: a right-to-left word's (Arabic, Hebrew) come from the right.
+        let nsText = text as NSString
+        func graphemeStart(_ index: Int) -> Int { nsText.rangeOfComposedCharacterSequence(at: min(max(index, 0), length - 1)).location }
+        let clustered = glyphs.map { (start: graphemeStart($0.index), glyph: $0.glyph, x: $0.x) }
+        let starts = Array(Set(clustered.map(\.start))).sorted()
+        let lefts = Dictionary(uniqueKeysWithValues: starts.map { start in (start, clustered.filter { $0.start == start }.map(\.x).min() ?? 0) })
+        let edges = lefts.values.sorted()
         var result: [(Range<Int>, STShape)] = []
         let ascent = CTFontGetAscent(font), descent = CTFontGetDescent(font)
         for (number, start) in starts.enumerated() {
             let end = number + 1 < starts.count ? starts[number + 1] : length
-            let members = glyphs.filter { $0.index == start }
-            let x = members.map(\.x).min() ?? 0
-            let nextX = number + 1 < starts.count ? (glyphs.filter { $0.index == starts[number + 1] }.map(\.x).min() ?? width) : width
-            let shapeGlyphs = members.map { STGlyph(font: $0.glyph.font, glyph: $0.glyph.glyph, offset: $0.x - x) }
-            result.append((start..<end, STShape(glyphs: shapeGlyphs, advance: nextX - x, verticalAdvance: style.size, ascent: ascent, descent: descent)))
+            let x = lefts[start] ?? 0
+            let right = edges.first { $0 > x + 0.001 } ?? width
+            let shapeGlyphs = clustered.filter { $0.start == start }.map { STGlyph(font: $0.glyph.font, glyph: $0.glyph.glyph, offset: $0.x - x) }
+            result.append((start..<end, STShape(glyphs: shapeGlyphs, advance: max(0, right - x), verticalAdvance: style.size, ascent: ascent, descent: descent)))
         }
         return result
     }
