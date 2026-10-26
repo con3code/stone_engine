@@ -2,7 +2,7 @@
 
 `Sources/stone_engine/page/` は、stone_engine に足した「ページ組版層」です。EPUB リーダー SMSReader のために作りました。stone_engine と同じく MIT ライセンスです。
 
-`STLabel` / `STTextView` は、1 つの文字列を 1 つの文字サイズで組みます。この層はその上で、書式の混ざった文章を段落ごとに行へ分け、決まった大きさのページに詰め、`CGContext` に描きます。電子書籍のリフロー表示に使うためのものです。
+`STLabel` / `STTextView` は、1 つの文字列を 1 つの文字サイズで組みます。この層はその上で、書式の混ざった文章を段落ごとに行へ分け、箱・表・段組・回り込みとともに決まった大きさのページに詰め、`CGContext` に描きます。電子書籍のリフロー表示に使うためのものです（SMSReader はこれで次世代パブリッシング研究会『EPUBリーダー表示テスト』のほとんどの項目を表示します）。
 
 既存のファイル（`context` `font` `layout` `parse` `view`）には手を入れていません。そこから使っているのは次のものです。
 
@@ -36,7 +36,18 @@
   - 欧文は単語の間でだけ改行する。
   - ……・――・‥ は 2 字の間で分けない。
 - **2倍ダーシ**: ―― ── —— は途切れないよう、つなげて描く。
-- **ブロック**: 両端揃え（空白を先に、次に和字の間を広げる）、行頭・中央・行末揃え、最終行の揃え、字下げ（負の値でぶら下げ）、前後と左右の余白、行の高さ、改ページの前後、空行（`<br/>` だけの段落）。
+- **ブロック**: 両端揃え（和文のある行は字間と空白に、欧文だけの行は空白に配る）、行頭・中央・行末揃え、最終行の揃え、字下げ（負の値でぶら下げ）、リストの記号を行の外に出す（`outsideMarker`・`markerEdge`。list-style-position: outside）、前後と左右の余白（CSS どおりに相殺し、ページの頭では捨てる）、行の高さ、改ページの前後、空行（`<br/>` だけの段落）、孤立行（orphans・widows）、1 行目だけの書式（::first-line）。
+- **箱**（`STBox`、ブロックの列の中の `boxStart` と `boxEnd` で囲む）: 罫（実線・破線・点線・二重線ほか）、角丸、背景色、背景画像（並べ方・大きさ・位置）、線形・放射・繰り返しのグラデーション、影（外・内）、輪郭線、border-image（9 分割）、幅と高さ（固定・最小・最大）、中身から決まる幅（min-content・max-content・fit-content。`intrinsicInline`、組む前に `resolvingIntrinsicSizes` で測る）、中身を中央に寄せる、回転・拡大・移動（中心は指定できる）、合成モード（mix-blend-mode・background-blend-mode）、中身の切り抜き、ページ・段で分かれたときの辺（slice・clone）、改ページ・改段の前後、分割しない（break-inside: avoid）。罫と padding と 1 行目が入らないページ・段の末尾では始めない。
+- **行の中の箱**（`STInlineBox`）: inline 要素の padding・罫・地色を、行ごとにその文字の範囲で描く（ルビまで含めて囲める）。
+- **表**（`STTable`）: 列の長さは指定（%・pt）と中身から、行の高さはいちばん高いセルに。行の間で改ページする。縦組みでも組める。
+- **回り込み**（`.float`）: 画像を行の先頭か末尾に寄せ、横の行を短くする。
+- **段組**（`STColumns`）: 段数か段の幅、段間と段間罫、balance（段の長さをそろえる）と auto、段抜き。段の中の改段。このページで割れるが次のページなら収まる段組は、直前の見出しといっしょに次のページへ送る。
+- **書字方向の混在**（`STFlow`）: 横組みのページの中の縦組みのブロック（扉など）、その逆。
+- **書体**: 本の書体（`STFontFamily.faces`。太字・斜体・unicode-range で face を選ぶ）、等幅、欧文の本物のイタリック体、OpenType の機能（kern・liga・jp90 ほか）。欧文は単語ごとに CoreText で組み、カーニングと合字を効かせる。
+- **約物と行分け**: 行頭・行末・隣接の約物の詰め（text-spacing の space-first・trim-start・allow-end ほか）、和欧間・和数間の四分アキ、word-break（keep-all・break-all）、line-break（loose・normal・strict・anywhere）、長い単語を分けるか（overflow-wrap）、欧文のハイフネーション、行頭の始め括弧と行末の句読点のぶら下げ。
+- **ルビ（追加）**: 下側のルビ、両側ルビ、ルビの揃え（start・center・space-between・space-around）、3 字以上のグループルビの行分け、圏点の位置（over・under）と約物には付けないこと、ルビの外側の圏点。
+- **線（追加）**: 線の種類（実線・二重線・点線・破線・波線）と色、縦組みの傍線の左右（text-underline-position）、文字ごとの位置。
+- **画像（追加）**: object-fit・object-position、合成モード、不透明度（opacity は文字・背景・画像の透明度として）。
 
 ## 使い方
 
@@ -66,7 +77,7 @@ let pages = typesetter.paginate(section, geometry: geometry)
 
 // 描く（ほかのスレッドからでもよい）
 let image = STPageRenderer.image(pages[0], geometry: geometry, writingMode: .vertical,
-                                 settings: settings, scale: 2, image: { id in nil })
+                                 settings: settings, scale: 2, boxes: section.boxes, image: { id in nil })
 
 // ページの上の文字の位置（選択・検索・リンク用）
 let characters = pages[0].characters(geometry: geometry, writingMode: .vertical)
@@ -79,12 +90,12 @@ let rubies = pages[0].rubies
 
 | ファイル | 内容 |
 | --- | --- |
-| `STPageModel.swift` | 文書の形（`STSection` `STBlock` `STInline`）、書式（`STTextStyle` `STBlockStyle`）、読み手の設定（`STReaderSettings`） |
-| `STFontBook.swift` | 書体と字形のキャッシュ、縦組み用字形（上流の GSUB 読みを鍵の中で呼ぶ） |
+| `STPageModel.swift` | 文書の形（`STSection` `STBlock` `STInline`）、書式（`STTextStyle` `STBlockStyle`）、箱・表・段組・書字方向の混在（`STBox` `STTable` `STColumns` `STFlow`）、読み手の設定（`STReaderSettings`） |
+| `STFontBook.swift` | 書体の選択（本の face・イタリック・OpenType の機能）と字形のキャッシュ、単語ごとの組み、縦組み用字形（上流の GSUB 読みを鍵の中で呼ぶ） |
 | `STCharacterClass.swift` | 文字の性質（縦組みでの向き、約物、禁則、ぶら下げ、単語の文字）のキャッシュ |
-| `STTypesetter.swift` | 行に分け、詰め、揃え、ページに詰める |
-| `STPageRenderer.swift` | `CGContext` に描く |
-| `STPageQueries.swift` | ページの上の文字・ルビ・ブロックの位置 |
+| `STTypesetter.swift` | 行に分け、詰め、揃え、ページに詰める。箱・表・回り込み・段組・書字方向の混在のレイアウト |
+| `STPageRenderer.swift` | `CGContext` に描く（箱・背景・罫・影・グラデーション・行の中の箱・ルビ・圏点・線） |
+| `STPageQueries.swift` | ページの上の文字・ルビ・ブロック・画像の位置 |
 
 ## 速さ
 
@@ -102,4 +113,7 @@ let rubies = pages[0].rubies
 - `STTypesetter` はスレッドごとに 1 つ使ってください。組んだ `STPage` は変更しないので、複数のスレッドから同時に描けます。
 - 上流の縦組み用字形の置き換えは、プロセス全体で 1 つの状態を持っています。この層では鍵（`NSLock`）の中で呼び、結果を自分でもキャッシュしています。
 - UAX #50 は主な範囲だけを表にしています。ここにない文字は横転します。
+- 表・段組・書字方向の混在・回り込みは、中身のブロックをそのブロックの後ろに並べ、範囲（`end`）で指す形です。本文の位置（`STBlock.offset`）はふつうのブロックと同じように数えます。
+- 段組は段の長さを二分探索で求めるので、段組のある章は組むのに時間がかかります（100ms ほど）。
+- 箱を描くには、`STPageRenderer` に `boxes`（`STSection.boxes`）を渡してください。
 - macOS 向けのビルドは、上流の `main` と同じく通りません（`STContext.swift` などが UIKit を使っているため）。この層そのものは CoreGraphics・CoreText・Foundation だけを使います。

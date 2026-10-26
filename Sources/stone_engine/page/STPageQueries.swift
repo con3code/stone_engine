@@ -34,7 +34,10 @@ public struct STPlacedRuby: Sendable, Hashable {
 extension STPage {
     /// The page's characters, line by line in reading order; images on their own are included.
     public func characters(geometry: STPageGeometry, writingMode: STWritingMode) -> [STPlacedCharacter] {
-        let mapper = STPageRenderer.Mapper(content: geometry.content, vertical: writingMode == .vertical)
+        characters(mapper: STPageRenderer.Mapper(content: geometry.content, vertical: writingMode == .vertical))
+    }
+
+    func characters(mapper: STPageRenderer.Mapper) -> [STPlacedCharacter] {
         var result: [STPlacedCharacter] = []
         for (lineIndex, placed) in lines.enumerated() {
             let line = placed.line
@@ -56,12 +59,28 @@ extension STPage {
             result.append(STPlacedCharacter(
                 range: image.textOffset..<(image.textOffset + 1), rect: rect, line: -1, block: image.blockIndex, link: nil, isBlank: false))
         }
+        // The blocks of the other writing mode, in their places.
+        for flow in flows {
+            let rect = mapper.rect(inline: flow.inline, block: flow.block, inlineSize: flow.inlineSize, blockSize: flow.blockSize)
+            let inner = flow.page.characters(mapper: STPageRenderer.Mapper(content: rect, vertical: flow.vertical))
+            let base = lines.count
+            result += inner.map { character in
+                STPlacedCharacter(range: character.range, rect: character.rect, line: character.line >= 0 ? character.line + base : -1,
+                                  block: character.block, link: character.link, isBlank: character.isBlank)
+            }
+        }
         return result
+    }
+
+    /// The page's pictures and where they stand on it (in points, y going down).
+    public func pictures(geometry: STPageGeometry, writingMode: STWritingMode) -> [(id: String, rect: CGRect)] {
+        let mapper = STPageRenderer.Mapper(content: geometry.content, vertical: writingMode == .vertical)
+        return images.map { ($0.id, mapper.rect(inline: $0.inline, block: $0.block, inlineSize: $0.inlineSize, blockSize: $0.blockSize)) }
     }
 
     /// The ruby of the page's lines.
     public var rubies: [STPlacedRuby] {
-        var result: [STPlacedRuby] = []
+        var result: [STPlacedRuby] = flows.flatMap(\.page.rubies)
         for placed in lines {
             let set = placed.line.block
             var seen = Set<Int>()
@@ -81,6 +100,9 @@ extension STPage {
     public var blockIndices: [Int] {
         var seen: [Int] = []
         for placed in lines where seen.last != placed.line.block.index { seen.append(placed.line.block.index) }
+        for flow in flows {
+            for index in flow.page.blockIndices where !seen.contains(index) { seen.append(index) }
+        }
         return seen
     }
 }

@@ -45,7 +45,8 @@ struct STCharacterClass: @unchecked Sendable {
         let ideographic = properties.isIdeographic || isKanaOrFullwidth(value)
         let space = properties.isWhitespace && value != 0x3000
         // Letters and digits, and the apostrophe inside a word ("don't").
-        let wordLetter = !ideographic && !space
+        // Characters set upright in vertical lines (Ⅰ, ℃) are not: lines break around them.
+        let wordLetter = !ideographic && !space && !isUpright(value)
             && (properties.isAlphabetic || properties.numericType != nil || value == 0x27 || value == 0x2019)
         let found = STCharacterClass(
             upright: isUpright(value),

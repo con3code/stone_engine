@@ -32,11 +32,14 @@ struct STShape: @unchecked Sendable {
 /// The fonts and shaped characters of one typesetting: made as they are first asked for and
 /// kept. Not shared between threads: each typesetter has its own.
 final class STFontBook {
+    /// A font as made for a run: its face's name, its size, whether it is slanted (a face
+    /// with no italic of its own) and made bold, and the OpenType features asked of it.
     private struct FontKey: Hashable {
-        var family: STFontFamily
-        var bold: Bool
-        var italic: Bool
+        var name: String
         var size: CGFloat
+        var slanted: Bool
+        var emboldened: Bool
+        var features: [String: Int]
     }
 
     private struct ShapeKey: Hashable {
@@ -49,40 +52,83 @@ final class STFontBook {
     private var fonts: [FontKey: CTFont] = [:]
     private var shapes: [ShapeKey: STShape] = [:]
     private var fallbacks: [String: CTFont] = [:]
+    private var knownNames: [String: Bool] = [:]
 
     init(settings: STReaderSettings) {
         self.settings = settings
     }
 
-    private func key(_ style: STTextStyle) -> FontKey {
+    /// Whether the system has a font by this PostScript name.
+    private func exists(_ name: String) -> Bool {
+        if let known = knownNames[name] { return known }
+        let found = (CTFontCopyPostScriptName(CTFontCreateWithName(name as CFString, 12, nil)) as String) == name
+        knownNames[name] = found
+        return found
+    }
+
+    /// The face a style sets a character in (by its first scalar): the reader's faces (a true
+    /// italic for Latin), or the book's own by their ranges, weight and style.
+    private func key(_ style: STTextStyle, scalar: UInt32) -> FontKey {
         var family = settings.forcedFamily ?? style.family
-        if case .named = family, !settings.usesBookFonts { family = .mincho }
-        return FontKey(family: family, bold: style.bold, italic: style.italic, size: style.size)
+        if !settings.usesBookFonts {
+            switch family {
+            case .named, .faces: family = .mincho
+            default: break
+            }
+        }
+        let wide = scalar >= 0x2E80 && !(0xFF61...0xFF9F).contains(scalar)
+        func reader(_ faces: [String], italics: [String]) -> FontKey {
+            let index = style.bold && faces.count > 1 ? 1 : 0
+            if style.italic, !wide, italics.indices.contains(index), exists(italics[index]) {
+                return FontKey(name: italics[index], size: style.size, slanted: false, emboldened: false, features: style.fontFeatures)
+            }
+            return FontKey(name: faces[index], size: style.size, slanted: style.italic, emboldened: false, features: style.fontFeatures)
+        }
+        func resolve(_ family: STFontFamily) -> FontKey {
+            switch family {
+            case .mincho: return reader(settings.minchoFonts, italics: settings.minchoItalicFonts)
+            case .gothic: return reader(settings.gothicFonts, italics: settings.gothicItalicFonts)
+            case .monospace: return reader(settings.monospaceFonts, italics: settings.monospaceItalicFonts)
+            case .named(let name):
+                guard exists(name) else { return resolve(.mincho) }
+                return FontKey(name: name, size: style.size, slanted: style.italic, emboldened: style.bold, features: style.fontFeatures)
+            case .faces(let faces, let fallback):
+                // The face declared last first, as CSS tries them.
+                let covering = faces.reversed().filter { $0.covers(scalar) && exists($0.name) }
+                guard !covering.isEmpty else { return resolve(fallback) }
+                let face = covering.first { $0.bold == style.bold && $0.italic == style.italic }
+                    ?? covering.first { $0.italic == style.italic }
+                    ?? covering[0]
+                return FontKey(name: face.name, size: style.size, slanted: style.italic && !face.italic,
+                               emboldened: style.bold && !face.bold, features: style.fontFeatures)
+            }
+        }
+        return resolve(family)
     }
 
     /// The font a style sets text in.
-    func font(_ style: STTextStyle) -> CTFont { font(for: key(style)) }
+    func font(_ style: STTextStyle) -> CTFont { font(for: key(style, scalar: 0x41)) }
 
     private func font(for key: FontKey) -> CTFont {
         if let font = fonts[key] { return font }
-        var name: String
-        switch key.family {
-        case .mincho: name = settings.minchoFonts[key.bold && settings.minchoFonts.count > 1 ? 1 : 0]
-        case .gothic: name = settings.gothicFonts[key.bold && settings.gothicFonts.count > 1 ? 1 : 0]
-        case .named(let named): name = named
-        }
-        var font = CTFontCreateWithName(name as CFString, key.size, nil)
-        // A name the system does not know comes back as another font: the reader's Mincho then.
-        if case .named = key.family, (CTFontCopyPostScriptName(font) as String) != name {
-            font = CTFontCreateWithName(settings.minchoFonts[key.bold && settings.minchoFonts.count > 1 ? 1 : 0] as CFString, key.size, nil)
-        }
-        if key.bold, case .named = key.family, let bold = CTFontCreateCopyWithSymbolicTraits(font, key.size, nil, .traitBold, .traitBold) {
+        var font = CTFontCreateWithName(key.name as CFString, key.size, nil)
+        if key.emboldened, let bold = CTFontCreateCopyWithSymbolicTraits(font, key.size, nil, .traitBold, .traitBold) {
             font = bold
         }
-        if key.italic {
-            // Slanted: Japanese faces have no italic of their own.
+        if key.slanted, let italic = CTFontCreateCopyWithSymbolicTraits(font, key.size, nil, .traitItalic, .traitItalic),
+           (CTFontCopyPostScriptName(italic) as String) != (CTFontCopyPostScriptName(font) as String) {
+            font = italic
+        } else if key.slanted {
+            // Slanted: the face has no italic of its own.
             var slant = CGAffineTransform(a: 1, b: 0, c: 0.2, d: 1, tx: 0, ty: 0)
             font = CTFontCreateCopyWithAttributes(font, key.size, &slant, nil)
+        }
+        if !key.features.isEmpty {
+            let settings = key.features.sorted { $0.key < $1.key }.map { tag, value in
+                [kCTFontOpenTypeFeatureTag: tag, kCTFontOpenTypeFeatureValue: value] as [CFString: Any]
+            }
+            let descriptor = CTFontDescriptorCreateWithAttributes([kCTFontFeatureSettingsAttribute: settings] as CFDictionary)
+            font = CTFontCreateCopyWithAttributes(font, key.size, nil, descriptor)
         }
         fonts[key] = font
         return font
@@ -91,11 +137,11 @@ final class STFontBook {
     /// One character shaped in `style`; `vertical` for an upright character of a vertical
     /// line, which takes the font's vertical forms (GSUB vert) where it has them.
     func shape(_ text: String, _ style: STTextStyle, vertical: Bool) -> STShape {
-        let fontKey = key(style)
+        let fontKey = key(style, scalar: text.unicodeScalars.first?.value ?? 0x41)
         let shapeKey = ShapeKey(text: text, font: fontKey, vertical: vertical)
         if let shape = shapes[shapeKey] { return shape }
         let base = font(for: fontKey)
-        var glyphs = glyphsOf(text, in: base)
+        var glyphs = glyphsOf(text, in: base, shaped: !fontKey.features.isEmpty)
         if vertical {
             for index in glyphs.indices {
                 glyphs[index].glyph = STVerticalForms.glyph(glyphs[index].glyph, in: glyphs[index].font)
@@ -113,14 +159,16 @@ final class STFontBook {
             CTFontGetAdvancesForGlyphs(glyphs[index].font, .vertical, &glyph, &down, 1)
             verticalAdvance = max(verticalAdvance, abs(down.height))
         }
-        // Combining marks and the like ride on the first glyph.
+        // Combining marks and the like ride on the first glyph, where CoreText placed them.
         if glyphs.count > 1, text.unicodeScalars.count > 1, text.count == 1 {
-            advance = glyphs.reduce(0) { max($0, $1.offset) } + {
-                var glyph = glyphs.last!.glyph
-                var size = CGSize.zero
-                CTFontGetAdvancesForGlyphs(glyphs.last!.font, .horizontal, &glyph, &size, 1)
-                return size.width
-            }()
+            let placed = glyphsOf(text, in: base, shaped: true)
+            if placed.count == glyphs.count {
+                for index in glyphs.indices { glyphs[index].offset = placed[index].offset }
+            }
+            var first = glyphs[0].glyph
+            var size = CGSize.zero
+            CTFontGetAdvancesForGlyphs(glyphs[0].font, .horizontal, &first, &size, 1)
+            advance = size.width
         }
         if verticalAdvance <= 0 { verticalAdvance = style.size }
         let font = glyphs.first?.font ?? base
@@ -131,12 +179,72 @@ final class STFontBook {
         return shape
     }
 
+    /// A run of Latin text (a word) shaped as one by CoreText, its kerning and ligatures
+    /// with it: each cluster (one character, or several a ligature joins) as a shape, by its
+    /// range in the run's UTF-16 units.
+    func shapeWord(_ text: String, _ style: STTextStyle) -> [(range: Range<Int>, shape: STShape)]? {
+        let first = text.unicodeScalars.first?.value ?? 0x41
+        let fontKey = key(style, scalar: first)
+        // Where the book's ranges put characters in other faces: each run of one face by itself.
+        if let split = text.firstIndex(where: { key(style, scalar: $0.unicodeScalars.first?.value ?? 0x41).name != fontKey.name }) {
+            let head = String(text[..<split]), tail = String(text[split...])
+            guard !head.isEmpty else {
+                // The first character alone, then the rest.
+                let one = String(text.first!), rest = String(text.dropFirst())
+                let shaped = shape(one, style, vertical: false)
+                let offset = (one as NSString).length
+                let others = rest.isEmpty ? [] : (shapeWord(rest, style) ?? [])
+                return [(0..<offset, shaped)] + others.map { ($0.range.lowerBound + offset)..<($0.range.upperBound + offset) }.enumerated().map { ($1, others[$0].shape) }
+            }
+            guard let before = shapeWord(head, style) else { return nil }
+            let offset = (head as NSString).length
+            let after = shapeWord(tail, style) ?? []
+            return before + after.map { ((($0.range.lowerBound + offset)..<($0.range.upperBound + offset)), $0.shape) }
+        }
+        let font = font(for: fontKey)
+        var attributes: [NSAttributedString.Key: Any] = [kCTFontAttributeName as NSAttributedString.Key: font]
+        // CoreText kerns whatever the font's feature says; a kern of 0 stops it (font-kerning: none).
+        if style.fontFeatures["kern"] == 0 { attributes[kCTKernAttributeName as NSAttributedString.Key] = 0 }
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: attributes))
+        var glyphs: [(index: Int, glyph: STGlyph, x: CGFloat)] = []
+        for run in (CTLineGetGlyphRuns(line) as? [CTRun]) ?? [] {
+            let count = CTRunGetGlyphCount(run)
+            guard count > 0 else { continue }
+            var ids = [CGGlyph](repeating: 0, count: count)
+            var positions = [CGPoint](repeating: .zero, count: count)
+            var indices = [CFIndex](repeating: 0, count: count)
+            CTRunGetGlyphs(run, CFRange(location: 0, length: count), &ids)
+            CTRunGetPositions(run, CFRange(location: 0, length: count), &positions)
+            CTRunGetStringIndices(run, CFRange(location: 0, length: count), &indices)
+            let runFont = (CTRunGetAttributes(run) as NSDictionary)[kCTFontAttributeName] as! CTFont
+            for i in 0..<count where ids[i] != 0 {
+                glyphs.append((indices[i], STGlyph(font: runFont, glyph: ids[i], offset: 0), positions[i].x))
+            }
+        }
+        guard !glyphs.isEmpty else { return nil }
+        let length = (text as NSString).length
+        let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+        // Clusters: the glyphs from one string index to the next.
+        let starts = Array(Set(glyphs.map(\.index))).sorted()
+        var result: [(Range<Int>, STShape)] = []
+        let ascent = CTFontGetAscent(font), descent = CTFontGetDescent(font)
+        for (number, start) in starts.enumerated() {
+            let end = number + 1 < starts.count ? starts[number + 1] : length
+            let members = glyphs.filter { $0.index == start }
+            let x = members.map(\.x).min() ?? 0
+            let nextX = number + 1 < starts.count ? (glyphs.filter { $0.index == starts[number + 1] }.map(\.x).min() ?? width) : width
+            let shapeGlyphs = members.map { STGlyph(font: $0.glyph.font, glyph: $0.glyph.glyph, offset: $0.x - x) }
+            result.append((start..<end, STShape(glyphs: shapeGlyphs, advance: nextX - x, verticalAdvance: style.size, ascent: ascent, descent: descent)))
+        }
+        return result
+    }
+
     /// The glyphs of a character in `font`, or in the font the system takes for it where
     /// `font` has none. A character of one scalar is looked up directly; a cluster (a
     /// character with a variation selector or combining marks) is shaped by CoreText.
-    private func glyphsOf(_ text: String, in font: CTFont) -> [STGlyph] {
+    private func glyphsOf(_ text: String, in font: CTFont, shaped: Bool = false) -> [STGlyph] {
         let units = Array(text.utf16)
-        if text.unicodeScalars.count == 1 {
+        if text.unicodeScalars.count == 1, !shaped {
             var glyphs = [CGGlyph](repeating: 0, count: units.count)
             if CTFontGetGlyphsForCharacters(font, units, &glyphs, units.count), glyphs[0] != 0 {
                 return [STGlyph(font: font, glyph: glyphs[0], offset: 0)]
