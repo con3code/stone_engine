@@ -78,6 +78,42 @@ extension STPage {
         return images.map { ($0.id, mapper.rect(inline: $0.inline, block: $0.block, inlineSize: $0.inlineSize, blockSize: $0.blockSize)) }
     }
 
+    /// Every picture on the page and where it is drawn (in points, y going down): those
+    /// standing on their own and floated, and those set in its lines (外字, a picture among
+    /// words), placed as the renderer draws them; those of the blocks of the other writing
+    /// mode too. For showing a picture by itself, as a finger rests on it.
+    public func allPictures(geometry: STPageGeometry, writingMode: STWritingMode) -> [(id: String, rect: CGRect)] {
+        allPictures(mapper: STPageRenderer.Mapper(content: geometry.content, vertical: writingMode == .vertical))
+    }
+
+    func allPictures(mapper: STPageRenderer.Mapper) -> [(id: String, rect: CGRect)] {
+        var result = images.map { ($0.id, mapper.rect(inline: $0.inline, block: $0.block, inlineSize: $0.inlineSize, blockSize: $0.blockSize)) }
+        for placed in lines {
+            let line = placed.line
+            let set = line.block
+            let emStart = placed.blockPosition + line.emStart
+            let emCentre = emStart + line.emSize / 2
+            for (offset, index) in line.items.enumerated() {
+                let item = set.items[index]
+                guard case .image(let id, let size) = item.kind else { continue }
+                // As STPageRenderer.drawLine places it.
+                let at = line.positions[offset] + item.leadPad + item.boxLead
+                if mapper.vertical {
+                    let centre = mapper.point(inline: at, block: emCentre)
+                    result.append((id, CGRect(x: centre.x - size.width / 2, y: centre.y, width: size.width, height: size.height)))
+                } else {
+                    let foot = mapper.point(inline: at, block: emStart + line.emSize - item.style.baselineShift)
+                    result.append((id, CGRect(x: foot.x, y: foot.y - size.height, width: size.width, height: size.height)))
+                }
+            }
+        }
+        for flow in flows {
+            let rect = mapper.rect(inline: flow.inline, block: flow.block, inlineSize: flow.inlineSize, blockSize: flow.blockSize)
+            result += flow.page.allPictures(mapper: STPageRenderer.Mapper(content: rect, vertical: flow.vertical))
+        }
+        return result
+    }
+
     /// The ruby of the page's lines.
     public var rubies: [STPlacedRuby] {
         var result: [STPlacedRuby] = flows.flatMap(\.page.rubies)
