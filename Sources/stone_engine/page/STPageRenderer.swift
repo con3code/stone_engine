@@ -716,7 +716,15 @@ public enum STPageRenderer {
                 context.saveGState()
                 defer { context.restoreGState() }
                 context.setAlpha(style.opacity)
-                if style.blendMode != .normal { context.setBlendMode(style.blendMode) }
+                if style.blendMode != .normal {
+                    context.setBlendMode(style.blendMode)
+                } else if settings.background.luminance >= 0.5, picture.isOpaque {
+                    // An opaque picture in a line (a JPEG 外字 on white) takes on the colour behind
+                    // it where it is white, as readers are expected to (the 電書連 test of a JPEG
+                    // 外字 on a tinted background): multiplied, on a light page only, where it
+                    // leaves the dark parts as they are.
+                    context.setBlendMode(.multiply)
+                }
                 let rect: CGRect
                 if mapper.vertical {
                     let centre = mapper.point(inline: at, block: emCentre)
@@ -1013,5 +1021,15 @@ public enum STPageRenderer {
 private extension CGRect {
     func inset(top: CGFloat, right: CGFloat, bottom: CGFloat, left: CGFloat) -> CGRect {
         CGRect(x: minX + left, y: minY + top, width: max(0, width - left - right), height: max(0, height - top - bottom))
+    }
+}
+
+private extension CGImage {
+    /// Without an alpha channel (a JPEG): nothing in it lets what is behind show through.
+    var isOpaque: Bool {
+        switch alphaInfo {
+        case .none, .noneSkipFirst, .noneSkipLast: true
+        default: false
+        }
     }
 }
