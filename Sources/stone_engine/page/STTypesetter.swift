@@ -1244,6 +1244,14 @@ public final class STTypesetter {
                 var least: CGFloat = 0, most: CGFloat = 0
                 for blockIndex in cell.blocks {
                     let inner = section.blocks[blockIndex]
+                    // A picture on its own: as long as it is across, at most; one that may be
+                    // made smaller (fit: a percentage max-width or the like) needs nothing at least.
+                    if case .image(_, let natural, let fit) = inner.kind {
+                        let across = (vertical ? natural.height : natural.width) + inner.style.marginStart + inner.style.marginEnd
+                        most = max(most, across)
+                        if !fit { least = max(least, across) }
+                        continue
+                    }
                     guard case .paragraph = inner.kind else {
                         if case .heading = inner.kind {} else { continue }
                         continue
@@ -1283,7 +1291,15 @@ public final class STTypesetter {
             }
             let gaps = spacing * CGFloat(columns + 1) + tablePadding
             let wanted = (0..<columns).reduce(CGFloat(0)) { $0 + max(given[$1] ?? most[$1], least[$1]) }
-            let whole = max(1, (tableLength ?? min(available, wanted + gaps)) - gaps)
+            // No longer than its max-width, whether it takes its length from its content or is given one.
+            var room = available
+            switch table.maxLength {
+            case .points(let points)?: room = min(room, points)
+            case .percent(let percent)?: room = min(room, available * percent / 100)
+            default: break
+            }
+            if let given = tableLength { tableLength = min(given, room) }
+            let whole = max(1, (tableLength ?? min(room, wanted + gaps)) - gaps)
             var lengths = (0..<columns).map { max(given[$0] ?? most[$0], least[$0]) }
             let total = lengths.reduce(0, +)
             if total < whole {
@@ -1332,7 +1348,7 @@ public final class STTypesetter {
             var rowsPlaced = 0
             for row in table.rows {
                 // Each cell's lines at its column's length.
-                var cells: [(cell: STTable.Cell, inline: CGFloat, length: CGFloat, lines: [(STLine, CGFloat)], height: CGFloat)] = []
+                var cells: [(cell: STTable.Cell, inline: CGFloat, length: CGFloat, lines: [(STLine, CGFloat)], images: [STPlacedImage], height: CGFloat)] = []
                 var column = 0
                 var inline = tableStart + (tableBox?.paddingStart ?? 0) + spacing
                 for cell in row {
@@ -1345,6 +1361,8 @@ public final class STTypesetter {
                     let contentStart = cellInline + box.paddingStart
                     let measure = max(1, length - box.paddingStart - box.paddingEnd)
                     var placed: [(STLine, CGFloat)] = []
+                    // Pictures on their own, at their place in the cell (block: from its content's top).
+                    var pictures: [STPlacedImage] = []
                     var height: CGFloat = 0
                     var previousAfter: CGFloat = 0
                     for blockIndex in cell.blocks {
@@ -1359,11 +1377,32 @@ public final class STTypesetter {
                                 height += line.extent
                             }
                             previousAfter = inner.style.marginAfter
+                        case .image(let id, let natural, _):
+                            // Made smaller to the cell's length and to the page, in its shape.
+                            height += placed.isEmpty && pictures.isEmpty ? 0 : max(previousAfter, inner.style.marginBefore)
+                            let innerMeasure = max(1, measure - inner.style.marginStart - inner.style.marginEnd)
+                            var inlineSize = vertical ? natural.height : natural.width
+                            var blockSize = vertical ? natural.width : natural.height
+                            let scale = min(1, innerMeasure / max(inlineSize, 1), blockExtent / max(blockSize, 1))
+                            inlineSize *= scale
+                            blockSize *= scale
+                            let alignOffset: CGFloat = switch inner.style.align {
+                            case .center: (innerMeasure - inlineSize) / 2
+                            case .end: innerMeasure - inlineSize
+                            default: 0
+                            }
+                            let imageStyle = inner.inlines.first?.style
+                            pictures.append(STPlacedImage(
+                                id: id, blendMode: imageStyle?.blendMode ?? .normal, fit: imageStyle?.objectFit ?? .fill,
+                                fitPosition: imageStyle?.objectPosition ?? CGPoint(x: 0.5, y: 0.5), textOffset: inner.offset, blockIndex: blockIndex,
+                                inline: contentStart + inner.style.marginStart + alignOffset, block: height, inlineSize: inlineSize, blockSize: blockSize))
+                            height += blockSize
+                            previousAfter = inner.style.marginAfter
                         default:
                             continue
                         }
                     }
-                    cells.append((cell, cellInline, length, placed, height))
+                    cells.append((cell, cellInline, length, placed, pictures, height))
                     inline += length + spacing
                     column += span
                 }
@@ -1400,6 +1439,17 @@ public final class STTypesetter {
                         page.extend(line.range)
                     }
                     page.boxes[placedBox].lines = firstLine..<page.lines.count
+                    let firstImage = page.images.count
+                    for var picture in cell.images {
+                        let top = rowStart + box.paddingBefore + shift + picture.block
+                        picture = STPlacedImage(
+                            id: picture.id, blendMode: picture.blendMode, fit: picture.fit, fitPosition: picture.fitPosition,
+                            textOffset: picture.textOffset, blockIndex: picture.blockIndex,
+                            inline: picture.inline, block: top, inlineSize: picture.inlineSize, blockSize: picture.blockSize)
+                        page.images.append(picture)
+                        page.extend(picture.textOffset..<(picture.textOffset + 1))
+                    }
+                    page.boxes[placedBox].images = firstImage..<page.images.count
                 }
                 position = rowStart + rowHeight + spacing
             }

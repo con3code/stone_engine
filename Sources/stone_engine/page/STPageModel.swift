@@ -635,6 +635,9 @@ public struct STTable: Sendable, Hashable {
 
     public var rows: [[Cell]] = []
     public var length: STTableLength = .auto
+    /// The most the table may be across (max-width; max-height in vertical text): the length
+    /// it takes from its content, or is given, is no longer.
+    public var maxLength: STTableLength?
     /// The space between cells (border-spacing), none where borders collapse into one.
     public var spacing: CGFloat = 2
     public var collapses = false
