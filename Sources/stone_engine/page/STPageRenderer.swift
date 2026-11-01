@@ -524,10 +524,72 @@ public enum STPageRenderer {
             }
             context.setLineWidth(width)
             setDash(styles[side], width: width, context: context)
-            context.move(to: start)
-            context.addLine(to: end)
+            if let rounded = roundedSide(side, rect: rect, widths: widths, radii: radii) {
+                context.addPath(rounded)
+            } else {
+                context.move(to: start)
+                context.addLine(to: end)
+            }
             context.strokePath()
         }
+    }
+
+    /// A side of a border with rounded corners, along the middle of its width: from the middle
+    /// of the corner at its start round to its straight part and on to the middle of the
+    /// corner at its end, so that two sides meeting there make the corner's whole curve (and a
+    /// side drawn alone turns half way into it). Nil where neither of its corners is round.
+    private static func roundedSide(_ side: Int, rect: CGRect, widths: [CGFloat], radii: [CGFloat]) -> CGPath? {
+        // Corners clockwise from the top left; the side runs from corner `side` to the next.
+        let first = side, second = (side + 1) % 4
+        guard radii.count == 4, radii[first] > 0 || radii[second] > 0 else { return nil }
+        // The line down the middle of each side.
+        let middle = CGRect(x: rect.minX + widths[3] / 2, y: rect.minY + widths[0] / 2,
+                            width: rect.width - (widths[1] + widths[3]) / 2, height: rect.height - (widths[0] + widths[2]) / 2)
+        guard middle.width > 0, middle.height > 0 else { return nil }
+        let limit = min(middle.width, middle.height) / 2
+        // The sides meeting at each corner: top left the left (3) and top (0), and so on.
+        func radius(_ corner: Int) -> CGFloat {
+            let across = (widths[corner] + widths[(corner + 3) % 4]) / 4
+            return min(max(0, radii[corner] - across), limit)
+        }
+        func centre(_ corner: Int, _ r: CGFloat) -> CGPoint {
+            switch corner {
+            case 0: CGPoint(x: middle.minX + r, y: middle.minY + r)
+            case 1: CGPoint(x: middle.maxX - r, y: middle.minY + r)
+            case 2: CGPoint(x: middle.maxX - r, y: middle.maxY - r)
+            default: CGPoint(x: middle.minX + r, y: middle.maxY - r)
+            }
+        }
+        // Each corner's quarter, y down: the top left from the left (π) up to the top (3π/2).
+        func startAngle(_ corner: Int) -> CGFloat { .pi + CGFloat(corner) * .pi / 2 }
+        func point(_ corner: Int, _ r: CGFloat, _ angle: CGFloat) -> CGPoint {
+            let c = centre(corner, r)
+            return CGPoint(x: c.x + r * cos(angle), y: c.y + r * sin(angle))
+        }
+        // A square corner: the side runs on to the box's edge, over the other side's width.
+        func squareEnd(_ corner: Int) -> CGPoint {
+            let x = corner == 0 || corner == 3 ? rect.minX : rect.maxX
+            let y = corner == 0 || corner == 1 ? rect.minY : rect.maxY
+            let p = point(corner, 0, 0)
+            return side % 2 == 0 ? CGPoint(x: x, y: p.y) : CGPoint(x: p.x, y: y)
+        }
+        let path = CGMutablePath()
+        let r1 = radius(first), r2 = radius(second)
+        if r1 > 0 {
+            let s = startAngle(first)
+            path.move(to: point(first, r1, s + .pi / 4))
+            path.addArc(center: centre(first, r1), radius: r1, startAngle: s + .pi / 4, endAngle: s + .pi / 2, clockwise: false)
+        } else {
+            path.move(to: squareEnd(first))
+        }
+        if r2 > 0 {
+            let s = startAngle(second)
+            path.addLine(to: point(second, r2, s))
+            path.addArc(center: centre(second, r2), radius: r2, startAngle: s, endAngle: s + .pi / 4, clockwise: false)
+        } else {
+            path.addLine(to: squareEnd(second))
+        }
+        return path
     }
 
     /// A background picture (tiled, or once, at its place) or a gradient, in the box.
