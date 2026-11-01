@@ -1636,11 +1636,16 @@ public final class STTypesetter {
             case .flow(let flow):
                 skipUntil = flow.end
                 // Its lines run across the page's: as long as the page (or as it is given)
-                // while it is set, then as long as its longest line.
+                // while it is set, then as long as its longest line; inside its borders and
+                // padding (insets), floated inside its margins too.
                 let available = max(1, inlineExtent - style.marginStart - style.marginEnd)
-                let lineRoom = min(flow.lineLength ?? blockExtent, blockExtent)
+                let insets = flow.insets, margins = flow.margins
+                let floating = flow.floatsAtEnd != nil
+                let contentRoom = max(1, available - insets.along - (floating ? margins.along : 0))
+                let acrossRoom = max(1, blockExtent - insets.across - (floating ? margins.across : 0))
+                let lineRoom = min(flow.lineLength ?? acrossRoom, acrossRoom)
                 func setFlow(_ lineLength: CGFloat) -> STPage? {
-                    let size = flow.vertical ? CGSize(width: available, height: lineLength) : CGSize(width: lineLength, height: available)
+                    let size = flow.vertical ? CGSize(width: contentRoom, height: lineLength) : CGSize(width: lineLength, height: contentRoom)
                     return layout(section, blocks: (index + 1)..<flow.end, geometry: STPageGeometry(size: size, top: 0, left: 0, bottom: 0, right: 0),
                                   inColumns: false, vertical: flow.vertical).first
                 }
@@ -1652,42 +1657,52 @@ public final class STTypesetter {
                     }.max() ?? 0
                     if longest > 0 { lineLength = min(lineRoom, longest + 1) }
                 }
-                let used = max(
+                let used = min(contentRoom, max(
                     made.lines.map { $0.blockPosition + $0.line.extent }.max() ?? 0,
                     made.images.map { $0.block + $0.blockSize }.max() ?? 0,
-                    made.boxes.map { $0.block + $0.blockSize }.max() ?? 0)
-                // Floated: at the lines' end or start, the lines beside it shortened, as a
-                // floated image is, where it leaves them room for a few characters.
+                    made.boxes.map { $0.block + $0.blockSize }.max() ?? 0))
+                // Its border box: along the page's lines and across them.
+                let borderInline = used + insets.along, borderBlock = lineLength + insets.across
+                /// The flow, its border and background about it, its border box at `inline`, `at`.
+                func place(inline: CGFloat, at: CGFloat) {
+                    if let box = flow.box {
+                        page.boxes.append(STPlacedBox(
+                            box: box, inline: inline, block: at, inlineSize: borderInline, blockSize: borderBlock,
+                            startsHere: true, endsHere: true, parent: open.last?.placed,
+                            lines: page.lines.count..<page.lines.count, images: page.images.count..<page.images.count))
+                    }
+                    page.flows.append(STPlacedFlow(
+                        page: made, vertical: flow.vertical, inline: inline + insets.start, block: at + insets.before,
+                        inlineSize: used, blockSize: lineLength))
+                    if made.range != 0..<0 || !made.lines.isEmpty { page.extend(made.range) }
+                    page.anchors += made.anchors
+                }
+                // Floated: at the lines' end or start, the lines beside it shortened as far as
+                // its margin box, as a floated image is, where it leaves them room for a few
+                // characters.
                 if let atEnd = flow.floatsAtEnd {
                     let startTaken = floats.filter { !$0.atEnd && $0.end > position }.map(\.length).reduce(0, +)
                     let endTaken = floats.filter { $0.atEnd && $0.end > position }.map(\.length).reduce(0, +)
-                    let inlineSize = min(used, available)
-                    let left = available - startTaken - endTaken - inlineSize - flow.floatGap
-                    if left >= block.baseStyle.size * 4 {
-                        let room = blockExtent - position - carryPositive - carryNegative - style.marginBefore
-                        if lineLength > room + 0.01, !page.isEmpty { newPage() }
+                    let length = max(0, margins.start + borderInline + margins.end)
+                    if available - startTaken - endTaken - length >= block.baseStyle.size * 4 {
+                        let room = blockExtent - position - carryPositive - carryNegative
+                        if margins.before + borderBlock > room + 0.01, !page.isEmpty { newPage() }
                         beginContent()
-                        let at = position + style.marginBefore
-                        let inline = atEnd ? style.marginStart + available - endTaken - inlineSize : style.marginStart + startTaken
-                        page.flows.append(STPlacedFlow(
-                            page: made, vertical: flow.vertical, inline: inline, block: at,
-                            inlineSize: inlineSize, blockSize: lineLength))
-                        if made.range != 0..<0 || !made.lines.isEmpty { page.extend(made.range) }
-                        page.anchors += made.anchors
-                        floats.append((atEnd, inlineSize + flow.floatGap, at + lineLength + flow.floatAfter))
+                        let at = position + margins.before
+                        let inline = atEnd
+                            ? style.marginStart + available - endTaken - margins.end - borderInline
+                            : style.marginStart + startTaken + margins.start
+                        place(inline: inline, at: at)
+                        floats.append((atEnd, length, max(position, at + borderBlock + margins.after)))
                         continue
                     }
                 }
                 carry(style.marginBefore)
-                if position + carryPositive + carryNegative + lineLength > blockExtent + 0.01, !page.isEmpty { newPage() }
+                if position + carryPositive + carryNegative + borderBlock > blockExtent + 0.01, !page.isEmpty { newPage() }
                 beginContent()
-                let offset = flow.centered ? max(0, (available - used) / 2) : 0
-                page.flows.append(STPlacedFlow(
-                    page: made, vertical: flow.vertical, inline: style.marginStart + offset, block: position,
-                    inlineSize: used, blockSize: lineLength))
-                if made.range != 0..<0 || !made.lines.isEmpty { page.extend(made.range) }
-                page.anchors += made.anchors
-                position += lineLength
+                let offset = flow.centered ? max(0, (available - borderInline) / 2) : 0
+                place(inline: style.marginStart + offset, at: position)
+                position += borderBlock
                 carry(style.marginAfter)
                 continue
             case .table(let table):

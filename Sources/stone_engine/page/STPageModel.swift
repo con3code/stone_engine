@@ -703,13 +703,36 @@ public struct STFlow: Sendable, Hashable {
     /// Floated (`float`): at the lines' end (right, in vertical text the bottom) or their
     /// start, the lines beside it shortened, as a floated image; nil where it is not.
     public var floatsAtEnd: Bool?
-    /// Floated: the room between it and the lines beside it, and after it across.
-    public var floatGap: CGFloat = 0
-    public var floatAfter: CGFloat = 0
+    /// Floated: its margins, which the lines beside it keep off (not floated, its block's
+    /// margins are its own).
+    public var margins = STEdges()
+    /// Its borders and padding: what it holds is set inside them.
+    public var insets = STEdges()
+    /// Its border and background, among the section's boxes, drawn about it.
+    public var box: Int?
     /// The index after its last block.
     public var end: Int = 0
 
     public init() {}
+}
+
+/// Lengths on a block's four sides, by the page it stands in: before and after across the
+/// lines, start and end along them.
+public struct STEdges: Sendable, Hashable {
+    public var before: CGFloat = 0, after: CGFloat = 0, start: CGFloat = 0, end: CGFloat = 0
+
+    public init() {}
+
+    public init(before: CGFloat, after: CGFloat, start: CGFloat, end: CGFloat) {
+        self.before = before
+        self.after = after
+        self.start = start
+        self.end = end
+    }
+
+    /// Both across the lines (before and after), and both along them (start and end).
+    public var across: CGFloat { before + after }
+    public var along: CGFloat { start + end }
 }
 
 /// The direction text runs in: left to right, right to left, or as its first strong letter says.
