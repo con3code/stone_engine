@@ -193,8 +193,11 @@ public enum STPageRenderer {
             let box = span.box
             let firstIndex = line.items.lowerBound + span.first, lastIndex = line.items.lowerBound + span.last
             let firstItem = set.items[firstIndex], lastItem = set.items[lastIndex]
-            var start = line.positions[span.first] + firstItem.startTrim
-            var end = line.positions[span.last] + lastItem.startTrim + line.advances[span.last]
+            // Inside its own margins where it starts or ends at the character.
+            let startsHere = firstIndex == 0 || !set.items[firstIndex - 1].style.inlineBoxes.contains { $0.id == id }
+            let endsHere = lastIndex + 1 >= set.items.count || !set.items[lastIndex + 1].style.inlineBoxes.contains { $0.id == id }
+            var start = line.positions[span.first] + firstItem.startTrim + (startsHere ? box.marginStart : 0)
+            var end = line.positions[span.last] + lastItem.startTrim + line.advances[span.last] - (endsHere ? box.marginEnd : 0)
             // Right-to-left text (STBidi) puts the box's characters otherwise along the line:
             // it takes in the room they take, whichever end they are at.
             if set.baseLevel > 0 || set.items[firstIndex...lastIndex].contains(where: { $0.level > 0 }) {
@@ -209,11 +212,11 @@ public enum STPageRenderer {
             // padded violet one leaves the violet's padding violet).
             for outer in firstItem.style.inlineBoxes.prefix(while: { $0.id != id })
             where firstIndex == 0 || !set.items[firstIndex - 1].style.inlineBoxes.contains(where: { $0.id == outer.id }) {
-                start += outer.startSpace
+                start += outer.startSpace + outer.marginStart
             }
             for outer in lastItem.style.inlineBoxes.prefix(while: { $0.id != id })
             where lastIndex + 1 >= set.items.count || !set.items[lastIndex + 1].style.inlineBoxes.contains(where: { $0.id == outer.id }) {
-                end -= outer.endSpace
+                end -= outer.endSpace + outer.marginEnd
             }
             let before: CGFloat, after: CGFloat
             if mapper.vertical {
@@ -231,8 +234,8 @@ public enum STPageRenderer {
                 context.fill(rect)
             }
             // The sides: before, after, start (only where the element starts on the line), end.
-            let isStart = firstItem.boxLead > 0 || span.first == 0 && line.items.lowerBound == 0
-            let isEnd = lastItem.boxTrail > 0
+            let isStart = firstItem.boxLead - firstItem.marginLead > 0 || span.first == 0 && line.items.lowerBound == 0
+            let isEnd = lastItem.boxTrail - lastItem.marginTrail > 0
             for side in 0..<4 where widths[side] > 0 {
                 if side == 2, !isStart { continue }
                 if side == 3, !isEnd { continue }

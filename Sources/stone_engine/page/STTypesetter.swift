@@ -45,9 +45,12 @@ struct STItem: @unchecked Sendable {
     /// drawn after `leadPad`.
     var leadPad: CGFloat = 0
     var trailPad: CGFloat = 0
-    /// Room for inline boxes' padding and borders before and after its glyphs.
+    /// Room for inline boxes' margins, padding and borders before and after its glyphs.
     var boxLead: CGFloat = 0
     var boxTrail: CGFloat = 0
+    /// The part of `boxLead` and `boxTrail` that is the boxes' margins, outside what is drawn of them.
+    var marginLead: CGFloat = 0
+    var marginTrail: CGFloat = 0
     /// Its embedding level among right-to-left text (STBidi): 0 left to right, 1 right to
     /// left, 2 a number inside right-to-left text.
     var level: UInt8 = 0
@@ -270,13 +273,15 @@ public final class STTypesetter {
             for box in items[index].style.inlineBoxes {
                 let first = index == 0 || !items[index - 1].style.inlineBoxes.contains { $0.id == box.id }
                 let last = index + 1 >= items.count || !items[index + 1].style.inlineBoxes.contains { $0.id == box.id }
-                if first, box.startSpace > 0 {
-                    set.items[index].boxLead += box.startSpace
-                    set.items[index].advance += box.startSpace
+                if first, box.startSpace > 0 || box.marginStart != 0 {
+                    set.items[index].boxLead += box.startSpace + box.marginStart
+                    set.items[index].marginLead += box.marginStart
+                    set.items[index].advance += box.startSpace + box.marginStart
                 }
-                if last, box.endSpace > 0 {
-                    set.items[index].boxTrail += box.endSpace
-                    set.items[index].advance += box.endSpace
+                if last, box.endSpace > 0 || box.marginEnd != 0 {
+                    set.items[index].boxTrail += box.endSpace + box.marginEnd
+                    set.items[index].marginTrail += box.marginEnd
+                    set.items[index].advance += box.endSpace + box.marginEnd
                 }
             }
         }

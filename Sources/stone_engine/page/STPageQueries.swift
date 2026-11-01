@@ -45,9 +45,10 @@ extension STPage {
             let emStart = placed.blockPosition + line.emStart
             for (offset, index) in line.items.enumerated() {
                 let item = set.items[index]
+                // Inside the inline boxes' margins about it (taken along the line, not its own).
                 let rect = mapper.rect(
-                    inline: line.positions[offset] + item.startTrim, block: emStart,
-                    inlineSize: max(line.advances[offset], 0.5), blockSize: line.emSize)
+                    inline: line.positions[offset] + item.startTrim + item.marginLead, block: emStart,
+                    inlineSize: max(line.advances[offset] - item.marginLead - item.marginTrail, 0.5), blockSize: line.emSize)
                 let start = set.block.offset + item.range.lowerBound
                 result.append(STPlacedCharacter(
                     range: start..<(set.block.offset + item.range.upperBound), rect: rect, line: lineIndex,

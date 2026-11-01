@@ -178,6 +178,10 @@ public struct STInlineBox: Sendable, Hashable {
     public var borderWidths: [CGFloat] = [0, 0, 0, 0]
     public var borderColors: [STColor?] = [nil, nil, nil, nil]
     public var borderStyles: [STBorderStyle] = [.none, .none, .none, .none]
+    /// Its margins along the line, before its start and after its end (negative ones pull
+    /// it back over what is before it, or what follows over it).
+    public var marginStart: CGFloat = 0
+    public var marginEnd: CGFloat = 0
 
     public init(id: Int) {
         self.id = id
