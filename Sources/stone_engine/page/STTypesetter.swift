@@ -1793,11 +1793,14 @@ public final class STTypesetter {
                 if let placed = open[at].placed {
                     let start = page.boxes[placed].block
                     let size = position - start
-                    if box.minBlockSize > size, page.boxes[placed].startsHere {
-                        let slack = box.minBlockSize - size
-                        if box.centersContent {
-                            // What is inside goes down to the middle.
-                            let shift = slack / 2
+                    // At least as large as it is given, or as the rest of the page.
+                    var least = box.minBlockSize
+                    if box.fillsPage { least = max(least, blockExtent - start) }
+                    if least > size, page.boxes[placed].startsHere {
+                        let slack = least - size
+                        if box.centersContent || box.fillsPage {
+                            // What is inside goes down to the middle (or to the end).
+                            let shift = box.contentAtEnd ? slack : slack / 2
                             let lines = page.boxes[placed].lines.lowerBound..<page.lines.count
                             for line in lines {
                                 page.lines[line] = STPlacedLine(line: page.lines[line].line, blockPosition: page.lines[line].blockPosition + shift)
@@ -1812,7 +1815,7 @@ public final class STTypesetter {
                             }
                             for inner in (placed + 1)..<page.boxes.count { page.boxes[inner].block += shift }
                         }
-                        position = start + box.minBlockSize
+                        position = start + least
                     } else if box.fixedBlockSize, page.boxes[placed].startsHere {
                         // Its own size: what it holds runs out of it.
                         position = start + box.minBlockSize

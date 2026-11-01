@@ -589,6 +589,11 @@ public struct STBox: Sendable, Hashable {
     public var origin = CGPoint(x: 0.5, y: 0.5)
     /// Its content set in the middle across where the box is larger than it (flex and grid centring).
     public var centersContent = false
+    /// As large across as the rest of the page it starts on (a strut as tall as the page
+    /// beside it: the 電書協 guide's 天地中央 and 下寄せ), its content in the middle of it or,
+    /// `contentAtEnd`, at its end.
+    public var fillsPage = false
+    public var contentAtEnd = false
     /// A box split between pages drawn whole on each (box-decoration-break: clone), not cut.
     public var cloneDecoration = false
     public var pageBreakBefore = false
