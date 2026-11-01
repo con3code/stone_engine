@@ -196,6 +196,9 @@ public struct STPlacedFlow: Sendable {
     public let page: STPage
     public let vertical: Bool
     public let inline: CGFloat, block: CGFloat, inlineSize: CGFloat, blockSize: CGFloat
+    /// The placed box (among the page's) of its border and background: it is turned, moved
+    /// and faded with it.
+    public internal(set) var placedBox: Int? = nil
 }
 
 /// The size of a page and the margins around its text, in points.
@@ -1461,7 +1464,8 @@ public final class STTypesetter {
                         // Nothing of it on this page yet: the whole table on the next.
                         if let placed = tablePlaced, placed == page.boxes.count - 1 { page.boxes.removeLast() }
                         tablePlaced = nil
-                        newPage()
+                        // Its caption (or a heading) at the page's end going with it.
+                        _ = newPageWithHeading(marginBefore: 0)
                         openTableBox()
                         position += (tableBox?.paddingBefore ?? 0) + spacing
                     } else {
@@ -1515,7 +1519,8 @@ public final class STTypesetter {
         /// go with what follows it onto the next): where they start and end, its anchor and its
         /// end margin.
         func takeTrailingHeading() -> (lines: [STPlacedLine], start: CGFloat, end: CGFloat, anchors: [String], marginAfter: CGFloat)? {
-            guard open.isEmpty, let last = page.lines.last, case .heading = last.line.block.block.kind else { return nil }
+            guard open.isEmpty, let last = page.lines.last else { return nil }
+            if case .heading = last.line.block.block.kind {} else if !last.line.block.block.style.keepsWithNext { return nil }
             let blockIndex = last.line.block.index
             guard let first = page.lines.lastIndex(where: { $0.line.block.index != blockIndex }).map({ $0 + 1 }) ?? Optional(0),
                   first > 0 else { return nil }
@@ -1662,45 +1667,67 @@ public final class STTypesetter {
                 continue
             case .flow(let flow):
                 skipUntil = flow.end
-                // Its lines run across the page's: as long as the page (or as it is given)
-                // while it is set, then as long as its longest line; inside its borders and
-                // padding (insets), floated inside its margins too.
+                // Its own lines run across the page's (a block of the other writing mode) or
+                // along them (a floated block of the same): as long as it is given, or as the
+                // room allows while it is set and then as long as its longest line; inside its
+                // borders and padding (insets), floated inside its margins too.
                 let available = max(1, inlineExtent - style.marginStart - style.marginEnd)
                 let insets = flow.insets, margins = flow.margins
                 let floating = flow.floatsAtEnd != nil
-                let contentRoom = max(1, available - insets.along - (floating ? margins.along : 0))
+                let orthogonal = flow.vertical != vertical
+                let alongRoom = max(1, available - insets.along - (floating ? margins.along : 0))
                 let acrossRoom = max(1, blockExtent - insets.across - (floating ? margins.across : 0))
-                let lineRoom = min(flow.lineLength ?? acrossRoom, acrossRoom)
-                func setFlow(_ lineLength: CGFloat) -> STPage? {
-                    let size = flow.vertical ? CGSize(width: contentRoom, height: lineLength) : CGSize(width: lineLength, height: contentRoom)
+                // Its lines' room, and the room its lines follow one another in.
+                let lineRoomMost = orthogonal ? acrossRoom : alongRoom
+                let followRoom = orthogonal ? alongRoom : acrossRoom
+                let lineRoom = min(flow.lineLength ?? lineRoomMost, lineRoomMost)
+                func setFlow(_ lineLength: CGFloat) -> [STPage] {
+                    let size = flow.vertical ? CGSize(width: followRoom, height: lineLength) : CGSize(width: lineLength, height: followRoom)
                     return layout(section, blocks: (index + 1)..<flow.end, geometry: STPageGeometry(size: size, top: 0, left: 0, bottom: 0, right: 0),
-                                  inColumns: false, vertical: flow.vertical).first
+                                  inColumns: false, vertical: flow.vertical)
                 }
-                guard let made = setFlow(lineRoom) else { continue }
+                var set = setFlow(lineRoom)
                 var lineLength = lineRoom
-                if flow.lineLength == nil {
-                    let longest = made.lines.map { line in
+                if flow.lineLength == nil, let first = set.first {
+                    let longest = first.lines.map { line in
                         zip(line.line.positions, line.line.advances).map { $0 + $1 }.max() ?? 0
                     }.max() ?? 0
-                    if longest > 0 { lineLength = min(lineRoom, longest + 1) }
+                    if longest > 0, longest + 1 < lineRoom {
+                        // As long as its longest line, its lines set again to that length.
+                        lineLength = longest + 1
+                        set = setFlow(lineLength)
+                    }
                 }
-                let used = min(contentRoom, max(
+                guard let made = set.first else { continue }
+                if set.count > 1, !orthogonal {
+                    // A floated block of the same writing mode longer than a page: its blocks
+                    // set in the text as they come, not beside it.
+                    skipUntil = index + 1
+                    continue
+                }
+                let used = min(followRoom, max(
                     made.lines.map { $0.blockPosition + $0.line.extent }.max() ?? 0,
                     made.images.map { $0.block + $0.blockSize }.max() ?? 0,
-                    made.boxes.map { $0.block + $0.blockSize }.max() ?? 0))
-                // Its border box: along the page's lines and across them.
-                let borderInline = used + insets.along, borderBlock = lineLength + insets.across
+                    made.boxes.map { $0.block + $0.blockSize }.max() ?? 0,
+                    made.flows.map { $0.block + $0.blockSize }.max() ?? 0))
+                // Its content's size and its border box's, along the page's lines and across them.
+                let contentInline = orthogonal ? used : lineLength, contentBlock = orthogonal ? lineLength : used
+                let borderInline = contentInline + insets.along, borderBlock = contentBlock + insets.across
                 /// The flow, its border and background about it, its border box at `inline`, `at`.
                 func place(inline: CGFloat, at: CGFloat) {
+                    var placedBox: Int?
                     if let box = flow.box {
+                        placedBox = page.boxes.count
                         page.boxes.append(STPlacedBox(
                             box: box, inline: inline, block: at, inlineSize: borderInline, blockSize: borderBlock,
                             startsHere: true, endsHere: true, parent: open.last?.placed,
                             lines: page.lines.count..<page.lines.count, images: page.images.count..<page.images.count))
                     }
-                    page.flows.append(STPlacedFlow(
+                    var placed = STPlacedFlow(
                         page: made, vertical: flow.vertical, inline: inline + insets.start, block: at + insets.before,
-                        inlineSize: used, blockSize: lineLength))
+                        inlineSize: contentInline, blockSize: contentBlock)
+                    placed.placedBox = placedBox
+                    page.flows.append(placed)
                     if made.range != 0..<0 || !made.lines.isEmpty { page.extend(made.range) }
                     page.anchors += made.anchors
                 }
@@ -1721,6 +1748,11 @@ public final class STTypesetter {
                             : style.marginStart + startTaken + margins.start
                         place(inline: inline, at: at)
                         floats.append((atEnd, length, max(position, at + borderBlock + margins.after)))
+                        continue
+                    }
+                    if !orthogonal {
+                        // No room beside it: its blocks set in the text as they come.
+                        skipUntil = index + 1
                         continue
                     }
                 }

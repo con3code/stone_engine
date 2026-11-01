@@ -151,8 +151,16 @@ public enum STPageRenderer {
         }
         for flow in page.flows {
             let rect = mapper.rect(inline: flow.inline, block: flow.block, inlineSize: flow.inlineSize, blockSize: flow.blockSize)
+            // Turned and moved with its box, blended as it is (its opacity is in what it holds already).
+            context.saveGState()
+            if let placed = flow.placedBox, page.boxes.indices.contains(placed), boxes.indices.contains(page.boxes[placed].box) {
+                context.concatenate(transform(of: placed))
+                let box = boxes[page.boxes[placed].box]
+                if box.blendMode != .normal { context.setBlendMode(box.blendMode) }
+            }
             drawBody(flow.page, mapper: Mapper(content: rect, vertical: flow.vertical), writingMode: flow.vertical ? .vertical : .horizontal,
                      settings: settings, in: context, boxes: boxes, image: image)
+            context.restoreGState()
         }
     }
 

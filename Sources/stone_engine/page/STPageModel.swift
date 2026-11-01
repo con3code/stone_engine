@@ -223,6 +223,8 @@ public struct STBlockStyle: Sendable, Hashable {
     /// Whether the book gave the line height (CSS line-height other than normal), rather
     /// than the reader's standard standing for it.
     public var lineHeightGiven = false
+    /// Not left at a page's end without what follows it (a table's caption), as a heading is not.
+    public var keepsWithNext = false
     public var background: STColor? = nil
     public var pageBreakBefore = false
     public var pageBreakAfter = false
