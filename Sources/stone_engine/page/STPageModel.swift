@@ -107,6 +107,12 @@ public struct STTextStyle: Sendable, Hashable {
     public var color: STColor? = nil
     /// Added after each character, in points.
     public var letterSpacing: CGFloat = 0
+    /// Added to each space (word-spacing), in points.
+    public var wordSpacing: CGFloat = 0
+    /// Lines are not broken between characters of this style (white-space: nowrap).
+    public var noWrap = false
+    /// Shadows of the characters (text-shadow), the first on top.
+    public var textShadows: [STShadow] = []
     /// Painted behind the characters (an inline element's background colour).
     public var background: STColor? = nil
     public var emphasis: STEmphasisMark? = nil
@@ -225,6 +231,9 @@ public struct STBlockStyle: Sendable, Hashable {
     public var lineHeightGiven = false
     /// Not left at a page's end without what follows it (a table's caption), as a heading is not.
     public var keepsWithNext = false
+    /// Set below the floats at the lines' start, at their end (CSS clear).
+    public var clearsStart = false
+    public var clearsEnd = false
     public var background: STColor? = nil
     public var pageBreakBefore = false
     public var pageBreakAfter = false

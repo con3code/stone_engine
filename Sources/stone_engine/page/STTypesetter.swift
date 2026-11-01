@@ -458,7 +458,8 @@ public final class STTypesetter {
             // Set upright by text-orientation alone (Latin and the like): the letter as it
             // stands across. The font's vertical forms (vrt2) of these are the turned ones.
             let shape = fonts.shape(String(character), style, vertical: vertical && upright && characterClass.upright)
-            let advance = (vertical && upright ? shape.verticalAdvance : shape.advance) + style.letterSpacing
+            var advance = (vertical && upright ? shape.verticalAdvance : shape.advance) + style.letterSpacing
+            if character == " " || character == "\u{A0}" { advance = max(0, advance + style.wordSpacing) }
             set.items.append(STItem(
                 kind: .glyphs, shape: shape, style: style, range: position..<(position + length),
                 characterClass: characterClass, sideways: vertical && !upright, advance: advance,
@@ -628,6 +629,7 @@ public final class STTypesetter {
     private func canBreak(before index: Int, in items: [STItem], style: STBlockStyle = STBlockStyle()) -> Bool {
         let before = items[index - 1], after = items[index]
         if before.isLineBreak { return true }
+        if before.style.noWrap && after.style.noWrap { return false }
         if let ruby = before.ruby, ruby == after.ruby {
             // Inside a group ruby: only one of more than two characters, which may run on to the next line.
             guard let set = currentSet, set.rubies.indices.contains(ruby), set.rubies[ruby].items.count > 2 else { return false }
@@ -1660,6 +1662,16 @@ public final class STTypesetter {
             let block = section.blocks[index]
             if index < skipUntil { continue }
             let style = block.style
+            // clear: below the floats on the sides it names, its margin in the clearance.
+            if style.clearsStart || style.clearsEnd {
+                // Its border edge no higher than their ends: its own margin taken into the clearance.
+                let below = (floats.filter { $0.atEnd ? style.clearsEnd : style.clearsStart }.map(\.end).max() ?? 0) - max(0, style.marginBefore)
+                if below > position + carryPositive + carryNegative {
+                    position = below
+                    carryPositive = 0
+                    carryNegative = 0
+                }
+            }
             switch block.kind {
             case .columns(let columns):
                 setColumns(columns, block: block, index: index)

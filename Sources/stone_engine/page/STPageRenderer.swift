@@ -843,25 +843,39 @@ public enum STPageRenderer {
             case .glyphs:
                 guard let shape = item.shape else { continue }
                 if item.characterClass.space { break }
-                if isJoinedDash(at: index, in: set.items) {
-                    drawJoinedDash(shape, item: item, from: position + item.startTrim, length: advance, emStart: emStart, line: line, mapper: mapper, context: context)
-                } else if mapper.vertical && item.sideways {
-                    // Turned a quarter clockwise about the line's centre.
-                    let start = mapper.point(inline: at + item.startTrim, block: emCentre)
-                    context.saveGState()
-                    context.translateBy(x: start.x, y: start.y)
-                    context.rotate(by: .pi / 2)
-                    drawGlyphs(shape, at: CGPoint(x: 0, y: (shape.ascent - shape.descent) / 2 - style.baselineShift), context: context)
-                    context.restoreGState()
-                } else if mapper.vertical {
-                    let centre = mapper.point(inline: at, block: emCentre)
-                    let ascentRatio = shape.ascent / max(shape.ascent + shape.descent, 1)
-                    let origin = CGPoint(x: centre.x - shape.advance / 2 + style.baselineShift, y: centre.y + style.size * ascentRatio)
-                    drawGlyphs(shape, at: origin, context: context)
-                } else {
-                    let baseline = mapper.point(inline: at, block: emStart + line.baseline)
-                    drawGlyphs(shape, at: CGPoint(x: baseline.x, y: baseline.y - style.baselineShift), context: context)
+                // The character as its place in the line has it.
+                let draw = {
+                    if isJoinedDash(at: index, in: set.items) {
+                        drawJoinedDash(shape, item: item, from: position + item.startTrim, length: advance, emStart: emStart, line: line, mapper: mapper, context: context)
+                    } else if mapper.vertical && item.sideways {
+                        // Turned a quarter clockwise about the line's centre.
+                        let start = mapper.point(inline: at + item.startTrim, block: emCentre)
+                        context.saveGState()
+                        context.translateBy(x: start.x, y: start.y)
+                        context.rotate(by: .pi / 2)
+                        drawGlyphs(shape, at: CGPoint(x: 0, y: (shape.ascent - shape.descent) / 2 - style.baselineShift), context: context)
+                        context.restoreGState()
+                    } else if mapper.vertical {
+                        let centre = mapper.point(inline: at, block: emCentre)
+                        let ascentRatio = shape.ascent / max(shape.ascent + shape.descent, 1)
+                        let origin = CGPoint(x: centre.x - shape.advance / 2 + style.baselineShift, y: centre.y + style.size * ascentRatio)
+                        drawGlyphs(shape, at: origin, context: context)
+                    } else {
+                        let baseline = mapper.point(inline: at, block: emStart + line.baseline)
+                        drawGlyphs(shape, at: CGPoint(x: baseline.x, y: baseline.y - style.baselineShift), context: context)
+                    }
                 }
+                // text-shadow: the character drawn with each shadow (the first on top), then as it
+                // is. Shadows take no account of the transform: offsets and blur in the device's.
+                for shadow in style.textShadows.reversed() {
+                    let device = context.userSpaceToDeviceSpaceTransform
+                    context.saveGState()
+                    context.setShadow(offset: CGSize(width: shadow.x, height: shadow.y).applying(device),
+                                      blur: shadow.blur * hypot(device.a, device.b), color: shadow.color.cgColor)
+                    draw()
+                    context.restoreGState()
+                }
+                draw()
             }
             drawDecorations(
                 item, from: position + item.startTrim, length: advance, emStart: emStart, line: line,
