@@ -159,6 +159,11 @@ public struct STPlacedBox: Sendable {
     /// The page's lines and images inside it.
     public internal(set) var lines: Range<Int>
     public internal(set) var images: Range<Int>
+    /// How much of the box, across the lines, stands on the pages (or columns) before this
+    /// piece of it and after: its background is laid over the whole box and cut to the piece
+    /// (box-decoration-break: slice).
+    public internal(set) var sliceBefore: CGFloat = 0
+    public internal(set) var sliceAfter: CGFloat = 0
 }
 
 /// One page of a section.
@@ -1047,7 +1052,29 @@ public final class STTypesetter {
     /// where a page breaks them.
     public func paginate(_ section: STSection, geometry: STPageGeometry) -> [STPage] {
         let section = section.boxes.contains { $0.intrinsicInline != nil } ? resolvingIntrinsicSizes(section, geometry: geometry) : section
-        return layout(section, blocks: 0..<section.blocks.count, geometry: geometry, inColumns: false)
+        var pages = layout(section, blocks: 0..<section.blocks.count, geometry: geometry, inColumns: false)
+        Self.slice(&pages)
+        return pages
+    }
+
+    /// Each piece of a box broken over pages told how much of the box goes before it and
+    /// after, across the lines: the pieces in their order, as long as each is.
+    static func slice(_ pages: inout [STPage]) {
+        var before: [Int: CGFloat] = [:]
+        for page in pages.indices {
+            for index in pages[page].boxes.indices {
+                let box = pages[page].boxes[index].box
+                pages[page].boxes[index].sliceBefore = before[box] ?? 0
+                before[box, default: 0] += pages[page].boxes[index].blockSize
+            }
+        }
+        guard before.count < pages.reduce(0, { $0 + $1.boxes.count }) else { return }
+        for page in pages.indices {
+            for index in pages[page].boxes.indices {
+                let placed = pages[page].boxes[index]
+                pages[page].boxes[index].sliceAfter = max(0, (before[placed.box] ?? 0) - placed.sliceBefore - placed.blockSize)
+            }
+        }
     }
 
     /// The section with its boxes sized by what they hold (min-content, max-content,

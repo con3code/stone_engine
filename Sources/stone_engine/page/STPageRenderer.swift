@@ -334,8 +334,17 @@ public enum STPageRenderer {
             context.clip()
             context.setAlpha(box.opacity)
             if box.backgroundBlendMode != .normal { context.setBlendMode(box.backgroundBlendMode) }
+            // Over the whole box where it is broken over pages (box-decoration-break: slice),
+            // this piece of it showing its part.
+            var layerRect = backgroundRect
+            if !box.cloneDecoration, fragment.sliceBefore > 0 || fragment.sliceAfter > 0 {
+                let whole = mapper.rect(inline: fragment.inline, block: fragment.block - fragment.sliceBefore, inlineSize: fragment.inlineSize,
+                                        blockSize: fragment.sliceBefore + fragment.blockSize + fragment.sliceAfter)
+                let borders = box.borderWidths
+                layerRect = box.backgroundToBorder ? whole : whole.inset(top: borders[0], right: borders[1], bottom: borders[2], left: borders[3])
+            }
             for layer in box.backgroundLayers.reversed() {
-                drawBackgroundLayer(layer, in: backgroundRect, context: context, image: image)
+                drawBackgroundLayer(layer, in: layerRect, context: context, image: image)
             }
             context.restoreGState()
         }
