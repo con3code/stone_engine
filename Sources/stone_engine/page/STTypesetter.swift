@@ -936,7 +936,7 @@ public final class STTypesetter {
     /// a line's start along and its length, the lines' extents taken as the block's usual one.
     func lines(of set: STSetBlock, room: (CGFloat) -> (start: CGFloat, measure: CGFloat)) -> [STLine] {
         let style = set.block.style
-        let usual = set.block.baseStyle.size * max(style.lineHeight, settings.minimumLineHeight)
+        let usual = set.block.baseStyle.size * settings.lineHeight(of: style)
         var ranges: [Range<Int>] = []
         var placed: [(start: CGFloat, measure: CGFloat)] = []
         var start = 0
@@ -1006,7 +1006,7 @@ public final class STTypesetter {
         let items = set.items[range]
         let base = set.block.baseStyle
         let emSize = items.reduce(CGFloat(0)) { max($0, $1.style.size) }.nonZero ?? base.size
-        let lineHeight = max(set.block.style.lineHeight, settings.minimumLineHeight)
+        let lineHeight = settings.lineHeight(of: set.block.style)
         var extent = emSize * lineHeight
         var over = (extent - emSize) / 2
         var under = over
@@ -1764,7 +1764,7 @@ public final class STTypesetter {
                             room += max(0, section.boxes[inner].marginBefore) + section.boxes[inner].paddingBefore
                         case .paragraph, .heading:
                             room += max(0, block.style.marginBefore)
-                                + block.baseStyle.size * max(block.style.lineHeight, settings.minimumLineHeight)
+                                + block.baseStyle.size * settings.lineHeight(of: block.style)
                             break scan
                         default:
                             break scan

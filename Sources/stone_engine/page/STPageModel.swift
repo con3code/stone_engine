@@ -220,6 +220,9 @@ public struct STBlockStyle: Sendable, Hashable {
     public var markerEdge: CGFloat = 0
     /// The distance from one line's baseline to the next, as a multiple of the font size.
     public var lineHeight: CGFloat = 1.75
+    /// Whether the book gave the line height (CSS line-height other than normal), rather
+    /// than the reader's standard standing for it.
+    public var lineHeightGiven = false
     public var background: STColor? = nil
     public var pageBreakBefore = false
     public var pageBreakAfter = false
@@ -442,8 +445,23 @@ public struct STReaderSettings: Sendable, Hashable {
     /// Every run set in this face whatever the book says (the reader's choice of 明朝 or
     /// ゴシック for the whole text); nil to follow the book.
     public var forcedFamily: STFontFamily? = nil
-    /// The line height every block is set to at least, as a multiple of its font size.
+    /// The line height every block is set to at least, as a multiple of its font size;
+    /// a line height the book gives tighter than `tightLineHeight` is kept as it is.
     public var minimumLineHeight: CGFloat = 1.5
+    /// Below this a line height the book gives is the book's own setting close (a table, a
+    /// chronology, a heading), not raised to the reader's minimum.
+    public var tightLineHeight: CGFloat = 1.5
+    /// The book's line heights as they are, the reader's minimum not applied (as Apple Books
+    /// sets them); where the book gives none, `normalLineHeight`.
+    public var followsBookLineHeights = false
+    public var normalLineHeight: CGFloat = 1.5
+
+    /// The line height a block is set to, as a multiple of its font size.
+    public func lineHeight(of style: STBlockStyle) -> CGFloat {
+        if followsBookLineHeights { return style.lineHeightGiven ? style.lineHeight : normalLineHeight }
+        if style.lineHeightGiven, style.lineHeight < tightLineHeight { return style.lineHeight }
+        return max(style.lineHeight, minimumLineHeight)
+    }
     /// The punctuation squeezed as in Japanese typesetting (約物の詰め) ("stone" mode).
     public var squeezesPunctuation = true
     /// 禁則: no line starting with closing punctuation or small kana, nor ending with opening.
