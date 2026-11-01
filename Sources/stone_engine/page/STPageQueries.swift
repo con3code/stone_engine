@@ -59,11 +59,13 @@ extension STPage {
             result.append(STPlacedCharacter(
                 range: image.textOffset..<(image.textOffset + 1), rect: rect, line: -1, block: image.blockIndex, link: nil, isBlank: false))
         }
-        // The blocks of the other writing mode, in their places.
+        // The blocks of the other writing mode, in their places, their lines numbered after
+        // the page's and the flows' before them.
+        var base = lines.count
         for flow in flows {
             let rect = mapper.rect(inline: flow.inline, block: flow.block, inlineSize: flow.inlineSize, blockSize: flow.blockSize)
             let inner = flow.page.characters(mapper: STPageRenderer.Mapper(content: rect, vertical: flow.vertical))
-            let base = lines.count
+            defer { base += (inner.map(\.line).max() ?? -1) + 1 }
             result += inner.map { character in
                 STPlacedCharacter(range: character.range, rect: character.rect, line: character.line >= 0 ? character.line + base : -1,
                                   block: character.block, link: character.link, isBlank: character.isBlank)

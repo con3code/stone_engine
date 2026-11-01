@@ -38,7 +38,7 @@ public enum STPageRenderer {
 
         for background in page.backgrounds {
             context.setFillColor(background.color.cgColor)
-            context.fill(mapper.rect(inline: background.inline, block: background.block, inlineSize: background.inlineSize, blockSize: background.blockSize))
+            context.fill(pixelAligned(mapper.rect(inline: background.inline, block: background.block, inlineSize: background.inlineSize, blockSize: background.blockSize), in: context))
         }
         for rule in page.rules {
             context.setFillColor(rule.color.cgColor)
@@ -319,8 +319,14 @@ public enum STPageRenderer {
         let backgroundPath = box.backgroundToBorder ? outer : roundedPath(inner, radii: radii.map { max(0, $0 - widths.max()!) })
         if let color = box.background {
             context.setFillColor(color.faded(box.opacity).cgColor)
-            context.addPath(backgroundPath)
-            context.fillPath()
+            if radii.allSatisfy({ $0 <= 0 }) {
+                // Square: its edges on the device's pixels, so that boxes filled side by side
+                // (a table's cells) meet without a pale seam where both edges were half covered.
+                context.fill(pixelAligned(backgroundRect, in: context))
+            } else {
+                context.addPath(backgroundPath)
+                context.fillPath()
+            }
         }
         if !box.backgroundLayers.isEmpty {
             context.saveGState()
@@ -404,6 +410,16 @@ public enum STPageRenderer {
                 }
             }
         }
+    }
+
+    /// `rect` with its edges moved to the nearest of the device's pixels: two filled side by
+    /// side meet on a pixel, neither edge drawn half covered (blended with what is under it).
+    static func pixelAligned(_ rect: CGRect, in context: CGContext) -> CGRect {
+        let device = context.convertToDeviceSpace(rect).standardized
+        let minX = device.minX.rounded(), minY = device.minY.rounded()
+        let snapped = CGRect(x: minX, y: minY, width: device.maxX.rounded() - minX, height: device.maxY.rounded() - minY)
+        guard snapped.width > 0, snapped.height > 0 else { return rect }
+        return context.convertToUserSpace(snapped).standardized
     }
 
     private static func roundedPath(_ rect: CGRect, radii: [CGFloat]) -> CGPath {

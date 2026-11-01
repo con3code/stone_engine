@@ -1227,7 +1227,9 @@ public final class STTypesetter {
         func setTable(_ table: STTable, block: STBlock) {
             let style = block.style
             let available = max(1, inlineExtent - style.marginStart - style.marginEnd)
-            let columns = table.rows.map { $0.reduce(0) { $0 + max(1, $1.span) } }.max() ?? 0
+            // Each cell's columns and rows, those of cells above going down (rowspan) passed over.
+            let places = table.places
+            let columns = places.flatMap { $0.map(\.columns.upperBound) }.max() ?? 0
             guard columns > 0 else { return }
             let spacing = table.collapses ? 0 : table.spacing
             let tableBox = table.box.map { section.boxes[$0] }
@@ -1270,12 +1272,11 @@ public final class STTypesetter {
             var given = [CGFloat?](repeating: nil, count: columns)
             var least = [CGFloat](repeating: 0, count: columns)
             var most = [CGFloat](repeating: 0, count: columns)
-            for row in table.rows {
-                var column = 0
-                for cell in row {
-                    guard column < columns else { break }
+            for (r, row) in table.rows.enumerated() {
+                for (i, cell) in row.enumerated() {
+                    let column = places[r][i].columns.lowerBound
                     let (low, high) = contentLengths(cell)
-                    if cell.span <= 1 {
+                    if places[r][i].columns.count == 1 {
                         least[column] = max(least[column], low)
                         most[column] = max(most[column], high)
                         switch cell.length {
@@ -1286,7 +1287,6 @@ public final class STTypesetter {
                         case .auto: break
                         }
                     }
-                    column += max(1, cell.span)
                 }
             }
             let gaps = spacing * CGFloat(columns + 1) + tablePadding
@@ -1345,69 +1345,91 @@ public final class STTypesetter {
             }
             openTableBox()
             position += (tableBox?.paddingBefore ?? 0) + spacing
-            var rowsPlaced = 0
-            for row in table.rows {
-                // Each cell's lines at its column's length.
-                var cells: [(cell: STTable.Cell, inline: CGFloat, length: CGFloat, lines: [(STLine, CGFloat)], images: [STPlacedImage], height: CGFloat)] = []
-                var column = 0
-                var inline = tableStart + (tableBox?.paddingStart ?? 0) + spacing
-                for cell in row {
-                    guard column < columns else { break }
-                    let span = min(max(1, cell.span), columns - column)
-                    let length = lengths[column..<(column + span)].reduce(0, +) + spacing * CGFloat(span - 1)
-                    let box = section.boxes[cell.box]
-                    // A right-to-left table's first column on the right.
-                    let cellInline = table.rightToLeft ? tableStart * 2 + tableInline - inline - length : inline
-                    let contentStart = cellInline + box.paddingStart
-                    let measure = max(1, length - box.paddingStart - box.paddingEnd)
-                    var placed: [(STLine, CGFloat)] = []
-                    // Pictures on their own, at their place in the cell (block: from its content's top).
-                    var pictures: [STPlacedImage] = []
-                    var height: CGFloat = 0
-                    var previousAfter: CGFloat = 0
-                    for blockIndex in cell.blocks {
-                        let inner = section.blocks[blockIndex]
-                        switch inner.kind {
-                        case .paragraph, .heading:
-                            height += placed.isEmpty ? 0 : max(previousAfter, inner.style.marginBefore)
-                            let set = setBlock(inner, index: blockIndex, vertical: vertical)
-                            let innerMeasure = max(inner.baseStyle.size, measure - inner.style.marginStart - inner.style.marginEnd)
-                            for line in lines(of: set, measure: innerMeasure, inlineStart: contentStart + inner.style.marginStart) {
-                                placed.append((line, height))
-                                height += line.extent
-                            }
-                            previousAfter = inner.style.marginAfter
-                        case .image(let id, let natural, _):
-                            // Made smaller to the cell's length and to the page, in its shape.
-                            height += placed.isEmpty && pictures.isEmpty ? 0 : max(previousAfter, inner.style.marginBefore)
-                            let innerMeasure = max(1, measure - inner.style.marginStart - inner.style.marginEnd)
-                            var inlineSize = vertical ? natural.height : natural.width
-                            var blockSize = vertical ? natural.width : natural.height
-                            let scale = min(1, innerMeasure / max(inlineSize, 1), blockExtent / max(blockSize, 1))
-                            inlineSize *= scale
-                            blockSize *= scale
-                            let alignOffset: CGFloat = switch inner.style.align {
-                            case .center: (innerMeasure - inlineSize) / 2
-                            case .end: innerMeasure - inlineSize
-                            default: 0
-                            }
-                            let imageStyle = inner.inlines.first?.style
-                            pictures.append(STPlacedImage(
-                                id: id, blendMode: imageStyle?.blendMode ?? .normal, fit: imageStyle?.objectFit ?? .fill,
-                                fitPosition: imageStyle?.objectPosition ?? CGPoint(x: 0.5, y: 0.5), textOffset: inner.offset, blockIndex: blockIndex,
-                                inline: contentStart + inner.style.marginStart + alignOffset, block: height, inlineSize: inlineSize, blockSize: blockSize))
-                            height += blockSize
-                            previousAfter = inner.style.marginAfter
-                        default:
-                            continue
+            // Each cell's lines and pictures at its columns' length.
+            typealias SetCell = (cell: STTable.Cell, rows: Range<Int>, inline: CGFloat, length: CGFloat, lines: [(STLine, CGFloat)], images: [STPlacedImage], height: CGFloat)
+            func setCell(_ cell: STTable.Cell, taking taken: Range<Int>, rows: Range<Int>) -> SetCell {
+                let start = min(taken.lowerBound, max(0, columns - 1))
+                let span = max(1, min(taken.count, columns - start))
+                let length = lengths[start..<(start + span)].reduce(0, +) + spacing * CGFloat(span - 1)
+                let inline = tableStart + (tableBox?.paddingStart ?? 0) + spacing
+                    + lengths[0..<start].reduce(0, +) + spacing * CGFloat(start)
+                let box = section.boxes[cell.box]
+                // A right-to-left table's first column on the right.
+                let cellInline = table.rightToLeft ? tableStart * 2 + tableInline - inline - length : inline
+                let contentStart = cellInline + box.paddingStart
+                let measure = max(1, length - box.paddingStart - box.paddingEnd)
+                var placed: [(STLine, CGFloat)] = []
+                // Pictures on their own, at their place in the cell (block: from its content's top).
+                var pictures: [STPlacedImage] = []
+                var height: CGFloat = 0
+                var previousAfter: CGFloat = 0
+                for blockIndex in cell.blocks {
+                    let inner = section.blocks[blockIndex]
+                    switch inner.kind {
+                    case .paragraph, .heading:
+                        height += placed.isEmpty ? 0 : max(previousAfter, inner.style.marginBefore)
+                        let set = setBlock(inner, index: blockIndex, vertical: vertical)
+                        let innerMeasure = max(inner.baseStyle.size, measure - inner.style.marginStart - inner.style.marginEnd)
+                        for line in lines(of: set, measure: innerMeasure, inlineStart: contentStart + inner.style.marginStart) {
+                            placed.append((line, height))
+                            height += line.extent
                         }
+                        previousAfter = inner.style.marginAfter
+                    case .image(let id, let natural, _):
+                        // Made smaller to the cell's length and to the page, in its shape.
+                        height += placed.isEmpty && pictures.isEmpty ? 0 : max(previousAfter, inner.style.marginBefore)
+                        let innerMeasure = max(1, measure - inner.style.marginStart - inner.style.marginEnd)
+                        var inlineSize = vertical ? natural.height : natural.width
+                        var blockSize = vertical ? natural.width : natural.height
+                        let scale = min(1, innerMeasure / max(inlineSize, 1), blockExtent / max(blockSize, 1))
+                        inlineSize *= scale
+                        blockSize *= scale
+                        let alignOffset: CGFloat = switch inner.style.align {
+                        case .center: (innerMeasure - inlineSize) / 2
+                        case .end: innerMeasure - inlineSize
+                        default: 0
+                        }
+                        let imageStyle = inner.inlines.first?.style
+                        pictures.append(STPlacedImage(
+                            id: id, blendMode: imageStyle?.blendMode ?? .normal, fit: imageStyle?.objectFit ?? .fill,
+                            fitPosition: imageStyle?.objectPosition ?? CGPoint(x: 0.5, y: 0.5), textOffset: inner.offset, blockIndex: blockIndex,
+                            inline: contentStart + inner.style.marginStart + alignOffset, block: height, inlineSize: inlineSize, blockSize: blockSize))
+                        height += blockSize
+                        previousAfter = inner.style.marginAfter
+                    default:
+                        continue
                     }
-                    cells.append((cell, cellInline, length, placed, pictures, height))
-                    inline += length + spacing
-                    column += span
                 }
-                let rowHeight = cells.map { $0.height + section.boxes[$0.cell.box].paddingBefore + section.boxes[$0.cell.box].paddingAfter }.max() ?? 0
-                if position + rowHeight > blockExtent + 0.01, !page.isEmpty {
+                return (cell, rows, cellInline, length, placed, pictures, height)
+            }
+            let setRows: [[SetCell]] = table.rows.enumerated().map { r, row in
+                row.enumerated().map { i, cell in setCell(cell, taking: places[r][i].columns, rows: places[r][i].rows) }
+            }
+            func outer(_ cell: SetCell) -> CGFloat {
+                cell.height + section.boxes[cell.cell.box].paddingBefore + section.boxes[cell.cell.box].paddingAfter
+            }
+            // Each row as high as its highest cell of one row; a cell going down several rows
+            // (rowspan) higher than they are together makes the last of them higher.
+            var rowHeights = setRows.map { row in row.filter { $0.rows.count == 1 }.map(outer).max() ?? 0 }
+            func across(_ rows: Range<Int>) -> CGFloat {
+                rows.reduce(0) { $0 + rowHeights[$1] } + spacing * CGFloat(rows.count - 1)
+            }
+            for cell in setRows.flatMap({ $0 }).filter({ $0.rows.count > 1 }).sorted(by: { $0.rows.count < $1.rows.count }) {
+                let short = outer(cell) - across(cell.rows)
+                if short > 0, let last = cell.rows.last { rowHeights[last] += short }
+            }
+            var rowsPlaced = 0
+            var r = 0
+            while r < setRows.count {
+                // The rows a cell going down holds together: kept on one page.
+                var groupEnd = r + 1
+                var scan = r
+                while scan < groupEnd {
+                    groupEnd = max(groupEnd, setRows[scan].map(\.rows.upperBound).max() ?? 0)
+                    scan += 1
+                }
+                let groupHeight = across(r..<groupEnd)
+                if position + groupHeight > blockExtent + 0.01, !page.isEmpty {
                     if rowsPlaced == 0 {
                         // Nothing of it on this page yet: the whole table on the next.
                         if let placed = tablePlaced, placed == page.boxes.count - 1 { page.boxes.removeLast() }
@@ -1422,36 +1444,40 @@ public final class STTypesetter {
                         if let placed = tablePlaced { page.boxes[placed].startsHere = false }
                     }
                 }
-                rowsPlaced += 1
-                let rowStart = position
-                for cell in cells {
-                    let box = section.boxes[cell.cell.box]
-                    let contentRoom = rowHeight - box.paddingBefore - box.paddingAfter
-                    let shift = max(0, contentRoom - cell.height) * cell.cell.align
-                    let firstLine = page.lines.count
-                    page.boxes.append(STPlacedBox(
-                        box: cell.cell.box, inline: cell.inline, block: rowStart, inlineSize: cell.length, blockSize: rowHeight,
-                        startsHere: true, endsHere: true, parent: tablePlaced ?? open.last?.placed,
-                        lines: firstLine..<firstLine, images: page.images.count..<page.images.count))
-                    let placedBox = page.boxes.count - 1
-                    for (line, offset) in cell.lines {
-                        page.lines.append(STPlacedLine(line: line, blockPosition: rowStart + box.paddingBefore + shift + offset))
-                        page.extend(line.range)
-                    }
-                    page.boxes[placedBox].lines = firstLine..<page.lines.count
-                    let firstImage = page.images.count
-                    for var picture in cell.images {
-                        let top = rowStart + box.paddingBefore + shift + picture.block
-                        picture = STPlacedImage(
-                            id: picture.id, blendMode: picture.blendMode, fit: picture.fit, fitPosition: picture.fitPosition,
-                            textOffset: picture.textOffset, blockIndex: picture.blockIndex,
-                            inline: picture.inline, block: top, inlineSize: picture.inlineSize, blockSize: picture.blockSize)
-                        page.images.append(picture)
-                        page.extend(picture.textOffset..<(picture.textOffset + 1))
-                    }
-                    page.boxes[placedBox].images = firstImage..<page.images.count
+                for row in r..<groupEnd {
+                    rowsPlaced += 1
+                    let rowStart = position
+                    for cell in setRows[row] {
+                        let rowHeight = across(cell.rows)
+                        let box = section.boxes[cell.cell.box]
+                        let contentRoom = rowHeight - box.paddingBefore - box.paddingAfter
+                        let shift = max(0, contentRoom - cell.height) * cell.cell.align
+                        let firstLine = page.lines.count
+                        page.boxes.append(STPlacedBox(
+                            box: cell.cell.box, inline: cell.inline, block: rowStart, inlineSize: cell.length, blockSize: rowHeight,
+                            startsHere: true, endsHere: true, parent: tablePlaced ?? open.last?.placed,
+                            lines: firstLine..<firstLine, images: page.images.count..<page.images.count))
+                        let placedBox = page.boxes.count - 1
+                        for (line, offset) in cell.lines {
+                            page.lines.append(STPlacedLine(line: line, blockPosition: rowStart + box.paddingBefore + shift + offset))
+                            page.extend(line.range)
+                        }
+                        page.boxes[placedBox].lines = firstLine..<page.lines.count
+                        let firstImage = page.images.count
+                        for var picture in cell.images {
+                            let top = rowStart + box.paddingBefore + shift + picture.block
+                            picture = STPlacedImage(
+                                id: picture.id, blendMode: picture.blendMode, fit: picture.fit, fitPosition: picture.fitPosition,
+                                textOffset: picture.textOffset, blockIndex: picture.blockIndex,
+                                inline: picture.inline, block: top, inlineSize: picture.inlineSize, blockSize: picture.blockSize)
+                            page.images.append(picture)
+                            page.extend(picture.textOffset..<(picture.textOffset + 1))
+                        }
+                        page.boxes[placedBox].images = firstImage..<page.images.count
+                        }
+                    position = rowStart + rowHeights[row] + spacing
                 }
-                position = rowStart + rowHeight + spacing
+                r = groupEnd
             }
             position += tableBox?.paddingAfter ?? 0
             closeTableBox(ends: true)
@@ -1630,6 +1656,28 @@ public final class STTypesetter {
                     made.lines.map { $0.blockPosition + $0.line.extent }.max() ?? 0,
                     made.images.map { $0.block + $0.blockSize }.max() ?? 0,
                     made.boxes.map { $0.block + $0.blockSize }.max() ?? 0)
+                // Floated: at the lines' end or start, the lines beside it shortened, as a
+                // floated image is, where it leaves them room for a few characters.
+                if let atEnd = flow.floatsAtEnd {
+                    let startTaken = floats.filter { !$0.atEnd && $0.end > position }.map(\.length).reduce(0, +)
+                    let endTaken = floats.filter { $0.atEnd && $0.end > position }.map(\.length).reduce(0, +)
+                    let inlineSize = min(used, available)
+                    let left = available - startTaken - endTaken - inlineSize - flow.floatGap
+                    if left >= block.baseStyle.size * 4 {
+                        let room = blockExtent - position - carryPositive - carryNegative - style.marginBefore
+                        if lineLength > room + 0.01, !page.isEmpty { newPage() }
+                        beginContent()
+                        let at = position + style.marginBefore
+                        let inline = atEnd ? style.marginStart + available - endTaken - inlineSize : style.marginStart + startTaken
+                        page.flows.append(STPlacedFlow(
+                            page: made, vertical: flow.vertical, inline: inline, block: at,
+                            inlineSize: inlineSize, blockSize: lineLength))
+                        if made.range != 0..<0 || !made.lines.isEmpty { page.extend(made.range) }
+                        page.anchors += made.anchors
+                        floats.append((atEnd, inlineSize + flow.floatGap, at + lineLength + flow.floatAfter))
+                        continue
+                    }
+                }
                 carry(style.marginBefore)
                 if position + carryPositive + carryNegative + lineLength > blockExtent + 0.01, !page.isEmpty { newPage() }
                 beginContent()

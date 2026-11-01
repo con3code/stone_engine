@@ -624,6 +624,8 @@ public struct STTable: Sendable, Hashable {
         public var length: STTableLength = .auto
         /// How many columns it takes.
         public var span: Int = 1
+        /// How many rows it takes (rowspan), from its own down; 0 to the last row.
+        public var rowSpan: Int = 1
         /// Where its content stands across the row: 0 at the start, 0.5 in the middle, 1 at the end.
         public var align: CGFloat = 0.5
 
@@ -649,6 +651,25 @@ public struct STTable: Sendable, Hashable {
     public var rightToLeft = false
 
     public init() {}
+
+    /// Where each cell stands, row by row: the columns it takes and the rows (by index) it
+    /// goes down to. A cell takes the first column of its row that no cell of a row above
+    /// it goes down into (rowspan), as HTML lays out a table.
+    public var places: [[(columns: Range<Int>, rows: Range<Int>)]] {
+        var taken: [Set<Int>] = Array(repeating: [], count: rows.count)
+        return rows.enumerated().map { r, row in
+            var column = 0
+            return row.map { cell in
+                while taken[r].contains(column) { column += 1 }
+                let columns = column..<(column + max(1, cell.span))
+                let down = cell.rowSpan <= 0 ? rows.count - r : min(cell.rowSpan, rows.count - r)
+                let spanned = r..<(r + max(1, down))
+                for below in spanned.dropFirst() { taken[below].formUnion(columns) }
+                column = columns.upperBound
+                return (columns, spanned)
+            }
+        }
+    }
 }
 
 /// Columns: how many, the space between them and its rule, how full each is.
@@ -679,6 +700,12 @@ public struct STFlow: Sendable, Hashable {
     public var lineLength: CGFloat?
     /// Set in the middle along the lines around it (margins auto).
     public var centered = false
+    /// Floated (`float`): at the lines' end (right, in vertical text the bottom) or their
+    /// start, the lines beside it shortened, as a floated image; nil where it is not.
+    public var floatsAtEnd: Bool?
+    /// Floated: the room between it and the lines beside it, and after it across.
+    public var floatGap: CGFloat = 0
+    public var floatAfter: CGFloat = 0
     /// The index after its last block.
     public var end: Int = 0
 
