@@ -491,7 +491,7 @@ public enum STKinsoku {
     /// dividing punctuation (？！‼⁇⁈⁉), middle dots (・：；), full stops and commas (。．、，),
     /// iteration marks (ヽヾゝゞ々〻), the prolonged sound mark ー and small kana.
     static let notStartingCharSet = CharacterSet(charactersIn: " ,.?:;!)）]］}｝｣、〕〉》」』】〙〗〟’”｠⦆»ヽヾゝゞーｰァィゥェォッャュョヮヵヶぁぃぅぇぉっゃゅょゎゕゖㇰㇱㇲㇳㇴㇵㇶㇷㇸㇹㇺㇻㇼㇽㇾㇿｧｨｩｪｫｬｭｮｯ々〻？！!‼⁇⁈⁉。．.｡，、､・･：；‐–〜～゠™")
-    static let notEndingCharSet = CharacterSet(charactersIn: "(（[［{｛｢〔〈《「『【〘〖〝‘“｟⦅«\"'")
+    static let notEndingCharSet = CharacterSet(charactersIn: "(（[［{｛｢〔〈《「『【〘〖〝‘“｟⦅«")
     static let hangingCharSet = CharacterSet(charactersIn: "、。")
     
 }

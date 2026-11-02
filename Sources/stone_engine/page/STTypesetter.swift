@@ -84,6 +84,14 @@ struct STRuby: @unchecked Sendable {
     /// How far the ruby stands off its base's middle, towards the base's end where positive:
     /// a ruby overhanging only the kana on one side (JLREQ 3.3.8).
     var shift: CGFloat = 0
+    /// How far it overhangs the characters before and after its base, and how far it may
+    /// (one ruby character over kana, none over anything else): at a line's start or end,
+    /// where the line before or after has those characters, it overhangs the other side
+    /// more, or the base takes the room it needs (`STTypesetter.rubyLead`, `rubyTail`).
+    var overhangBefore: CGFloat = 0
+    var overhangAfter: CGFloat = 0
+    var roomBefore: CGFloat = 0
+    var roomAfter: CGFloat = 0
 }
 
 /// A block's items, shaped once and shared by the lines and pages made of them.
@@ -341,7 +349,22 @@ public final class STTypesetter {
     /// What is left over the base takes, half before it and half after, its glyphs in the
     /// middle; the ruby stands off its middle by the difference of its overhangs.
     private func spreadRubies(_ set: STSetBlock) {
-        for rubyIndex in set.rubies.indices {
+        // 熟語ルビ: the mono rubies of one word, one after another, set together.
+        var inWords = Set<Int>()
+        var index = 0
+        while index < set.rubies.count {
+            var end = index + 1
+            if let word = set.rubies[index].style.rubyJukugo {
+                while end < set.rubies.count, set.rubies[end].style.rubyJukugo == word,
+                      set.rubies[end].items.lowerBound == set.rubies[end - 1].items.upperBound { end += 1 }
+            }
+            if end - index > 1 {
+                spreadJukugo(set, rubies: Array(index..<end))
+                inWords.formUnion(index..<end)
+            }
+            index = end
+        }
+        for rubyIndex in set.rubies.indices where !inWords.contains(rubyIndex) {
             let ruby = set.rubies[rubyIndex]
             let range = ruby.items
             guard !range.isEmpty else { continue }
@@ -368,6 +391,10 @@ public final class STTypesetter {
             after += moreAfter
             rest -= moreAfter
             set.rubies[rubyIndex].shift = (after - before) / 2
+            set.rubies[rubyIndex].overhangBefore = before
+            set.rubies[rubyIndex].overhangAfter = after
+            set.rubies[rubyIndex].roomBefore = roomBefore
+            set.rubies[rubyIndex].roomAfter = roomAfter
             let pad = max(0, rest)
             if ruby.style.rubyAlign == .spaceAround, range.count > 1 {
                 // Group ruby longer than its base: the base's characters spread under it, a
@@ -388,6 +415,69 @@ public final class STTypesetter {
             set.items[range.upperBound - 1].trailPad += pad / 2
             set.items[range.upperBound - 1].advance += pad / 2
         }
+    }
+
+    /// A word's mono rubies (熟語ルビ, JLREQ 3.3.7): each over the middle of its base where it
+    /// fits; a longer one over its neighbours' bases too, the next ones moved on to follow it
+    /// and the whole kept within the word. Only where they are longer than the word together
+    /// do they overhang the kana beside it (one ruby character on each side at most) and the
+    /// word's characters take the rest between them (1:2:1).
+    private func spreadJukugo(_ set: STSetBlock, rubies group: [Int]) {
+        let units = group.map { set.rubies[$0] }
+        let bases = units.map { unit in set.items[unit.items].reduce(CGFloat(0)) { $0 + $1.squeezedAdvance } }
+        guard zip(units, bases).contains(where: { $0.length > $1 + 0.01 }) else { return }
+        let first = units[0].items.lowerBound, last = units[units.count - 1].items.upperBound
+        func room(_ index: Int, _ ruby: STRuby) -> CGFloat {
+            guard set.items.indices.contains(index), set.items[index].ruby == nil, Self.isKana(set.items[index].scalar) else { return 0 }
+            return ruby.style.size
+        }
+        let roomBefore = room(first - 1, units[0]), roomAfter = room(last, units[units.count - 1])
+        let extra = max(0, units.reduce(0) { $0 + $1.length } - bases.reduce(0, +))
+        var before = min(roomBefore, extra / 2), after = min(roomAfter, extra / 2)
+        var rest = extra - before - after
+        let moreBefore = min(roomBefore - before, rest)
+        before += moreBefore
+        rest -= moreBefore
+        let moreAfter = min(roomAfter - after, rest)
+        after += moreAfter
+        rest -= moreAfter
+        // What is left between the word's characters, 1:2:1.
+        if rest > 0.01 {
+            let unit = rest / CGFloat(last - first)
+            set.items[first].leadPad += unit / 2
+            set.items[first].advance += unit / 2
+            for item in first..<(last - 1) {
+                set.items[item].trailPad += unit
+                set.items[item].advance += unit
+            }
+            set.items[last - 1].trailPad += unit / 2
+            set.items[last - 1].advance += unit / 2
+        }
+        // Each base's middle along the word, the rubies placed in turn and kept within it.
+        var centres: [CGFloat] = [], along: CGFloat = 0
+        for unit in units {
+            let length = set.items[unit.items].reduce(CGFloat(0)) { $0 + $1.squeezedAdvance }
+            centres.append(along + length / 2)
+            along += length
+        }
+        var starts: [CGFloat] = [], end = -before
+        for (unit, centre) in zip(units, centres) {
+            let start = max(centre - unit.length / 2, end)
+            starts.append(start)
+            end = start + unit.length
+        }
+        var next = along + after
+        for k in units.indices.reversed() {
+            if starts[k] + units[k].length > next { starts[k] = next - units[k].length }
+            next = starts[k]
+        }
+        for (k, rubyIndex) in group.enumerated() {
+            set.rubies[rubyIndex].shift = starts[k] - (centres[k] - units[k].length / 2)
+        }
+        set.rubies[group[0]].overhangBefore = before
+        set.rubies[group[0]].roomBefore = roomBefore
+        set.rubies[group[group.count - 1]].overhangAfter = after
+        set.rubies[group[group.count - 1]].roomAfter = roomAfter
     }
 
     private static func isKana(_ scalar: UInt32) -> Bool {
@@ -473,7 +563,7 @@ public final class STTypesetter {
             index += 1
             let length = String(character).utf16.count
             let characterClass = STCharacterClass.of(character)
-            let upright: Bool
+            var upright: Bool
             switch style.orientation {
             case .mixed: upright = characterClass.upright
             case .upright: upright = true
@@ -481,11 +571,32 @@ public final class STTypesetter {
             }
             // Set upright by text-orientation alone (Latin and the like): the letter as it
             // stands across. The font's vertical forms (vrt2) of these are the turned ones.
-            let shape = fonts.shape(String(character), style, vertical: vertical && upright && characterClass.upright)
+            var shape = fonts.shape(String(character), style, vertical: vertical && upright && characterClass.upright)
+            var characterStyle = style
+            // “ ” ‘ ’ (Tr in UAX #50 since Unicode 18) among Japanese in a vertical line: upright
+            // in the font's full-width vertical forms (〝〟), where it has them; turned beside
+            // Latin, and where it has none. An opening one is told by what follows, a closing
+            // one by what comes before.
+            let scalarValue = character.unicodeScalars.first?.value ?? 0
+            if vertical, style.orientation == .mixed, [0x2018, 0x2019, 0x201C, 0x201D].contains(scalarValue) {
+                let opening = scalarValue == 0x2018 || scalarValue == 0x201C
+                let beside: Character? = opening ? (index < characters.count ? characters[index] : nil) : (index >= 2 ? characters[index - 2] : nil)
+                if let beside, STCharacterClass.of(beside).ideographic {
+                    characterStyle.fontFeatures["fwid"] = 1
+                    let across = fonts.shape(String(character), characterStyle, vertical: false)
+                    let down = fonts.shape(String(character), characterStyle, vertical: true)
+                    if down.glyphs.map(\.glyph) != across.glyphs.map(\.glyph) {
+                        shape = down
+                        upright = true
+                    } else {
+                        characterStyle = style
+                    }
+                }
+            }
             var advance = (vertical && upright ? shape.verticalAdvance : shape.advance) + style.letterSpacing
             if character == " " || character == "\u{A0}" { advance = max(0, advance + style.wordSpacing) }
             set.items.append(STItem(
-                kind: .glyphs, shape: shape, style: style, range: position..<(position + length),
+                kind: .glyphs, shape: shape, style: characterStyle, range: position..<(position + length),
                 characterClass: characterClass, sideways: vertical && !upright, advance: advance,
                 scalar: character.unicodeScalars.first?.value ?? 0))
             position += length
@@ -562,7 +673,15 @@ public final class STTypesetter {
     /// Characters set side by side in the space of one (縦中横), upright in a vertical line;
     /// across, as they are.
     private func appendCombined(_ text: String, style: STTextStyle, at position: Int, vertical: Bool, to set: STSetBlock) {
-        let shape = fonts.shape(text, style, vertical: false)
+        var shape = fonts.shape(text, style, vertical: false)
+        // Two, three or four characters in the font's half, third or quarter widths (hwid,
+        // twid, qwid) where it has them, rather than squeezed to one em when drawn.
+        if vertical, shape.advance > style.size * 1.01, let feature = [2: "hwid", 3: "twid", 4: "qwid"][text.count] {
+            var narrow = style
+            narrow.fontFeatures[feature] = 1
+            let fitted = fonts.shape(text, narrow, vertical: false)
+            if fitted.advance < shape.advance - 0.5 { shape = fitted }
+        }
         let scalar = text.unicodeScalars.first ?? " "
         set.items.append(STItem(
             kind: vertical ? .combined(shape) : .glyphs, shape: shape, style: style, range: position..<(position + text.utf16.count),
@@ -682,6 +801,13 @@ public final class STTypesetter {
             default: break
             }
             if notStarting || before.characterClass.notEnding { return false }
+            // ASCII " and ': opening after a space, a line's start or an opening mark, else
+            // closing (UAX #14's QU); a line neither starts with a closing one nor ends with an opening one.
+            func opens(_ i: Int) -> Bool {
+                i == 0 || items[i - 1].isSpace || items[i - 1].isLineBreak || items[i - 1].characterClass.notEnding
+            }
+            if [0x22, 0x27].contains(after.scalar), !opens(index) { return false }
+            if [0x22, 0x27].contains(before.scalar), opens(index - 1) { return false }
         }
         // 分離禁止: the halves of ……, ――, ‥‥ stay together, and of the くの字点 〳〵 and 〴〵.
         if before.scalar == after.scalar, Self.inseparable.contains(before.scalar) { return false }
@@ -805,7 +931,9 @@ public final class STTypesetter {
                 available += items.prefix { $0.range.upperBound <= spacing.outsideMarker }.reduce(0) { $0 + $1.squeezedAdvance }
             }
             // An opening mark at this line's start gives up its empty half.
-            let trimsStart = spacing.spacingStart == .trim || (spacing.spacingStart == .first && (start > 0 || !lines.isEmpty))
+            // Not at the paragraph's start nor after a forced break (space-first).
+            let trimsStart = spacing.spacingStart == .trim
+                || (spacing.spacingStart == .first && start > 0 && !items[start - 1].isLineBreak)
             var width: CGFloat = 0
             var index = start
             var end: Int?
@@ -819,8 +947,11 @@ public final class STTypesetter {
                    !items[index].sideways, items[index].startTrim == 0 {
                     advance -= items[index].style.size / 2
                 }
-                // What it takes ending the line: no 和欧間 after it there.
-                let ending = advance - items[index].autospaceAfter
+                // A ruby starting the line overhangs nothing before it.
+                if index == start { advance += Self.rubyLead(set, at: index) }
+                // What it takes ending the line: no 和欧間 after it there; a ruby ending it
+                // overhangs nothing after it.
+                let ending = advance - items[index].autospaceAfter + Self.rubyTail(set, at: index)
                 // A closing mark that holds the line only trimmed: kept on it, trimmed (allow-end, trim-end).
                 if width + ending > available + 0.01, index > start, spacing.spacingEnd != .space, settings.squeezesPunctuation,
                    items[index].characterClass.punctuation == .firstHalf, !items[index].sideways, items[index].endTrim == 0,
@@ -840,7 +971,7 @@ public final class STTypesetter {
                     // item (禁則, 分離禁止), it and what may not be parted from it are taken in where
                     // squeezing the line's punctuation and spaces makes room for them.
                     if !canBreak(before: index, in: items, style: spacing), settings.squeezesPunctuation,
-                       let taken = pushedIn(items, from: start, overflowing: index, width: width, available: available, style: spacing,
+                       let taken = pushedIn(set, from: start, overflowing: index, width: width, available: available, style: spacing,
                                             startTrimmed: trimsStart) {
                         end = taken
                         break
@@ -907,14 +1038,15 @@ public final class STTypesetter {
     /// Where a line overflowing at `index`, which may not start the next line, ends taken in
     /// (追い込み): the end of what may not be parted from it, where squeezing the line from
     /// `start` makes room for it all; nil where it does not.
-    private func pushedIn(_ items: [STItem], from start: Int, overflowing index: Int, width: CGFloat, available: CGFloat,
+    private func pushedIn(_ set: STSetBlock, from start: Int, overflowing index: Int, width: CGFloat, available: CGFloat,
                           style: STBlockStyle, startTrimmed: Bool) -> Int? {
+        let items = set.items
         var end = index + 1
         while end < items.count, end - index < 4, !canBreak(before: end, in: items, style: style) { end += 1 }
         guard end >= items.count || canBreak(before: end, in: items, style: style) else { return nil }
         var total = width
         for i in index..<end { total += items[i].squeezedAdvance }
-        total -= items[end - 1].autospaceAfter
+        total += Self.rubyTail(set, at: end - 1) - items[end - 1].autospaceAfter
         let over = total - available
         guard over > 0.01 else { return end }
         var room: CGFloat = 0
@@ -922,6 +1054,21 @@ public final class STTypesetter {
             for step in 0...3 where !(step == 2 && i == start && startTrimmed) { room += squeezable(items[i], step: step, atEnd: i == end - 1) }
         }
         return room + 0.01 >= over ? end : nil
+    }
+
+    /// The room a ruby whose base starts a line needs before the base: what it would overhang
+    /// before, past what the other side has room for (JLREQ 3.3.8, at a line's start).
+    static func rubyLead(_ set: STSetBlock, at index: Int) -> CGFloat {
+        guard set.items.indices.contains(index), let r = set.items[index].ruby, set.rubies[r].items.lowerBound == index else { return 0 }
+        let ruby = set.rubies[r]
+        return max(0, ruby.overhangBefore - (ruby.roomAfter - ruby.overhangAfter))
+    }
+
+    /// The room a ruby whose base ends a line needs after the base (at a line's end).
+    static func rubyTail(_ set: STSetBlock, at index: Int) -> CGFloat {
+        guard set.items.indices.contains(index), let r = set.items[index].ruby, set.rubies[r].items.upperBound - 1 == index else { return 0 }
+        let ruby = set.rubies[r]
+        return max(0, ruby.overhangAfter - (ruby.roomBefore - ruby.overhangBefore))
     }
 
     /// Squeezes a line too long by `amount`, step by step in JLREQ 3.8.3's order, each step's
@@ -1000,7 +1147,8 @@ public final class STTypesetter {
         // The marks that have given their empty half at the line's ends: no more of them.
         var given = Set<Int>()
         if settings.squeezesPunctuation {
-            let trimsStart = style.spacingStart == .trim || (style.spacingStart == .first && !(isFirst && range.lowerBound == 0))
+            let afterBreak = range.lowerBound > 0 && set.items[range.lowerBound - 1].isLineBreak
+            let trimsStart = style.spacingStart == .trim || (style.spacingStart == .first && !(isFirst && range.lowerBound == 0) && !afterBreak)
             if trimsStart, items[0].characterClass.punctuation == .secondHalf, !items[0].sideways, items[0].startTrim == 0 {
                 starts[0] = items[0].style.size / 2
                 advances[0] -= starts[0]
@@ -1030,6 +1178,14 @@ public final class STTypesetter {
         while trailing > 0, items[trailing - 1].isSpace || items[trailing - 1].isLineBreak { trailing -= 1 }
         // No 和欧間 at the line's end.
         if trailing > 0 { advances[trailing - 1] -= items[trailing - 1].autospaceAfter }
+        // A ruby at the line's start or end: the room its base needs where it overhangs
+        // nothing beyond the line (the base's glyph after the room at the start).
+        let lead = Self.rubyLead(set, at: range.lowerBound)
+        if lead > 0 {
+            starts[0] -= lead
+            advances[0] += lead
+        }
+        if trailing > 0 { advances[trailing - 1] += Self.rubyTail(set, at: range.lowerBound + trailing - 1) }
         var used = advances.reduce(0, +)
         for index in trailing..<items.count { used -= advances[index] }
         var hanging: CGFloat = 0

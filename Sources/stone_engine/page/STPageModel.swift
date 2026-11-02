@@ -146,6 +146,11 @@ public struct STTextStyle: Sendable, Hashable {
     /// how it is spread over a longer base.
     public var rubyUnder = false
     public var rubyAlign: STRubyAlign = .spaceAround
+    /// For ruby: the 熟語 (jukugo ruby, JLREQ 3.3.7) it is part of, the same number on each of
+    /// the mono rubies of one word that follow one another: a ruby longer than its base
+    /// stands over the bases beside it in the word, and the word is spaced only where its
+    /// rubies together are longer than it.
+    public var rubyJukugo: Int? = nil
     /// How an image is put on what is under it (mix-blend-mode on an img).
     public var blendMode: CGBlendMode = .normal
     /// OpenType features, by tag ("kern", "liga", "jp90"), as font-feature-settings and the

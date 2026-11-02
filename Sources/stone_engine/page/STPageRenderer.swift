@@ -1050,6 +1050,8 @@ public enum STPageRenderer {
     /// Whether emphasis marks go beside an item: characters, not spaces, line breaks or
     /// punctuation (CSS Text Decoration: Zs, Cc, Cf and P* take none).
     private static func takesEmphasis(_ item: STItem) -> Bool {
+        // 縦中横 takes one mark, as one character.
+        if case .combined = item.kind { return true }
         guard case .glyphs = item.kind, !item.isSpace, let scalar = Unicode.Scalar(item.scalar) else { return false }
         switch scalar.properties.generalCategory {
         case .connectorPunctuation, .dashPunctuation, .openPunctuation, .closePunctuation, .initialPunctuation,
@@ -1092,17 +1094,18 @@ public enum STPageRenderer {
             let total = lengths.reduce(0, +)
             let span = end - start
             var gap: CGFloat = 0
-            var along = start + (span - total) / 2 + (total > span ? whole.shift : 0)
+            var along = start + (span - total) / 2 + whole.shift
             // Not before the line's start nor past its end: the kana it would overhang are on
             // the line before or after.
-            if total > span {
+            if total > span || whole.shift != 0 {
                 let lineStart = line.positions[0] + set.items[line.items.lowerBound].startTrim
+                    - STTypesetter.rubyLead(set, at: line.items.lowerBound)
                 let lastIndex = line.items.upperBound - 1
                 let lineEnd = line.positions[line.items.count - 1] + set.items[lastIndex].startTrim + line.advances[line.items.count - 1]
                 if first == 0 { along = max(along, min(lineStart, start)) }
                 if line.items.lowerBound + last == lastIndex { along = min(along, max(lineEnd, end) - total) }
             }
-            if total < span, !lengths.isEmpty {
+            if total < span, !lengths.isEmpty, whole.shift == 0 {
                 switch ruby.style.rubyAlign {
                 case .start: along = start
                 case .center: break

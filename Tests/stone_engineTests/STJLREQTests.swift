@@ -211,4 +211,77 @@ final class STJLREQTests: XCTestCase {
         XCTAssertEqual(spaced.block.rubies[0].shift, 0, accuracy: 0.01)
         XCTAssertEqual(spaced.advances[1], size * 1.5, accuracy: 0.01)
     }
+
+    // MARK: 3.1.5, 3.2.5, 3.3.9, UAX #50
+
+    func testAnOpeningMarkAfterAForcedBreakKeepsItsHalfAsAtTheParagraphsStart() {
+        let set = page([.text("あい", style), .lineBreak(style), .text("「う」", style)], em: 10).lines
+        XCTAssertEqual(set.count, 2)
+        XCTAssertEqual(set[1].line.advances[0], size, accuracy: 0.01, "「 full, as at a paragraph's start (space-first)")
+        let wrapped = page([.text("あいうえおかきくけこ「さ」", style)], em: 10).lines
+        XCTAssertEqual(wrapped[1].line.advances[0], size / 2, accuracy: 0.01, "trimmed where the line only wrapped")
+    }
+
+    func testASCIIQuotesAreOpeningOrClosingByWhatIsBesideThem() {
+        // A closing " does not start a line; an opening one does not end one.
+        let closing = lines("あいうえ\"お\"かき", em: 5)
+        XCTAssertFalse(closing.dropFirst().contains { $0.hasPrefix("\"かき") || $0 == "\"" }, "\(closing)")
+        let opening = lines("あいう \"えお\"か", em: 5)
+        XCTAssertFalse(opening.contains { $0.hasSuffix("\"") && !$0.hasSuffix("お\"") }, "\(opening)")
+    }
+
+    func testTateChuYokoTakesTheFontsNarrowFiguresAndEmphasis() {
+        let set = page([.text("あ", style), .combined("123", style), .text("い", style)], em: 10, writingMode: .vertical).lines[0].line
+        guard case .combined(let shape) = set.block.items[1].kind else { return XCTFail("not combined") }
+        XCTAssertLessThanOrEqual(shape.advance, size * 1.05, "three figures in a third of an em each (twid)")
+    }
+
+    func testJapaneseQuotesStandUprightInVerticalLines() {
+        let set = page([.text("あ“い”う said “hi”", style)], em: 20, writingMode: .vertical).lines[0].line
+        let items = set.block.items
+        XCTAssertFalse(items[1].sideways, "“ before い upright")
+        XCTAssertFalse(items[3].sideways, "” after い upright")
+        XCTAssertTrue(items.last { $0.scalar == 0x201D }?.sideways == true, "” after Latin turned")
+    }
+
+    func testARubyAtALinesEndOrStartOverhangsNothingBeyondTheLine() {
+        let whole: (String) -> NSString = { $0 as NSString }
+        // 字漢《かんじ》い with 漢 fifth: its ruby would overhang い, on the next line, and may not
+        // overhang 字: 漢 goes to the next line.
+        let end: [STInline] = [.text("あいう字", style), .ruby(base: [.text("漢", style)], ruby: "かんじ", style: style), .text("いう", style)]
+        let endText = whole("あいう字漢いう")
+        XCTAssertEqual(page(end, em: 5).lines.map { endText.substring(with: NSRange($0.line.range)) }.first, "あいう字")
+        // え漢《かんじ》い: half on each side, and え takes it all at the line's end: 漢 stays.
+        let kana: [STInline] = [.text("あいうえ", style), .ruby(base: [.text("漢", style)], ruby: "かんじ", style: style), .text("いう", style)]
+        let kanaText = whole("あいうえ漢いう")
+        XCTAssertEqual(page(kana, em: 5).lines.map { kanaText.substring(with: NSRange($0.line.range)) }.first, "あいうえ漢")
+        // お｜漢《かんじ》字 with 漢 starting a line: お is on the line before, so the base takes the room.
+        let start: [STInline] = [.text("あいうえお", style), .ruby(base: [.text("漢", style)], ruby: "かんじ", style: style), .text("字です", style)]
+        let second = page(start, em: 5).lines[1].line
+        XCTAssertEqual(second.advances[0], size * 1.5, accuracy: 0.01, "half an em before 漢")
+        XCTAssertEqual(second.positions[0], size / 2, accuracy: 0.01, "漢 after it")
+    }
+
+    // MARK: 3.3.7 熟語ルビ
+
+    func testAWordsRubiesStandOverItsBasesTogether() {
+        var word = style
+        word.rubyJukugo = 1
+        func inlines(_ style: STTextStyle) -> [STInline] {
+            [.text("字", self.style), .ruby(base: [.text("百", style)], ruby: "ひゃく", style: style),
+             .ruby(base: [.text("日", style)], ruby: "じつ", style: style), .ruby(base: [.text("紅", style)], ruby: "こう", style: style),
+             .text("が咲く", self.style)]
+        }
+        // Mono ruby: 百 spaced for its ruby, as 字 before it may not be overhung.
+        let mono = page(inlines(style), em: 10).lines[0].line
+        XCTAssertEqual(mono.advances[1], size * 1.5, accuracy: 0.01)
+        // 熟語ルビ: the bases set solid; ひゃく over 百 and part of 日, じつ and こう moved on,
+        // こう overhanging が by half an em.
+        let jukugo = page(inlines(word), em: 10).lines[0].line
+        for i in 1...3 { XCTAssertEqual(jukugo.advances[i], size, accuracy: 0.01, "base \(i) solid") }
+        XCTAssertEqual(jukugo.block.rubies.map(\.shift), [5, 10, 10])
+        // Rubies no longer than their bases: as mono ruby.
+        let short: [STInline] = [.ruby(base: [.text("日", word)], ruby: "ひ", style: word), .ruby(base: [.text("本", word)], ruby: "ほん", style: word)]
+        XCTAssertEqual(page(short, em: 10).lines[0].line.block.rubies.map(\.shift), [0, 0])
+    }
 }
