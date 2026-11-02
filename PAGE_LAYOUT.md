@@ -26,7 +26,7 @@
 - **上付き・下付き**: ベースラインをずらす。
 - **線**: 傍線・下線・打ち消し線。縦組みでは over が右、under が左。行にルビや圏点があれば、その外側に引く。
 - **背景**: インライン（span）の背景色、ブロックの背景色。
-- **画像**: 行の中の画像（外字）と、1 枚だけの画像のブロック（ページに収まるよう縮める・次のページへ送る）。
+- **画像**: 行の中の画像（外字）と、1 枚だけの画像のブロック（ページに収まるよう縮める・次のページへ送る）。行の中の不透過な画像（JPEG の外字など、アルファのないもの）は、紙の色が明るい（明るさ 0.5 以上）とき乗算で描き、白い所に地色を出す。書式に mix-blend-mode があればそれを使う。
 - **約物の詰め**
   - 「」「 や 。」 のように約物が続くときの半角詰め。
   - 行頭の始め括弧の詰め。
@@ -36,13 +36,19 @@
   - 欧文は単語の間でだけ改行する。
   - ……・――・‥ は 2 字の間で分けない。
 - **2倍ダーシ**: ―― ── —— は途切れないよう、つなげて描く。
-- **ブロック**: 両端揃え（和文のある行は字間と空白に、欧文だけの行は空白に配る）、行頭・中央・行末揃え、最終行の揃え、字下げ（負の値でぶら下げ）、リストの記号を行の外に出す（`outsideMarker`・`markerEdge`。list-style-position: outside）、前後と左右の余白（CSS どおりに相殺し、ページの頭では捨てる）、行の高さ、改ページの前後、空行（`<br/>` だけの段落）、孤立行（orphans・widows）、1 行目だけの書式（::first-line）。
+- **ブロック**: 両端揃え（和文のある行は字間と空白に、欧文だけの行は空白に配る）、行頭・中央・行末揃え、最終行の揃え、字下げ（負の値でぶら下げ）、リストの記号を行の外に出す（`outsideMarker`・`markerEdge`。list-style-position: outside）、前後と左右の余白（CSS どおりに相殺し、ページの頭では捨てる）、行の高さ、改ページの前後、空行（`<br/>` だけの段落）、孤立行（orphans・widows）、1 行目だけの書式（::first-line）。次のブロックと離さない（`keepsWithNext`。表のキャプションや break-after: avoid のブロックを、見出しと同じくページの末尾に残さない）。回り込みの下へ送る（`clearsStart`・`clearsEnd`。clear。ブロックの余白は回り込みの下までの空きに含める）。
 - **箱**（`STBox`、ブロックの列の中の `boxStart` と `boxEnd` で囲む）: 罫（実線・破線・点線・二重線ほか）、角丸、背景色、背景画像（並べ方・大きさ・位置）、線形・放射・繰り返しのグラデーション、影（外・内）、輪郭線、border-image（9 分割）、幅と高さ（固定・最小・最大）、中身から決まる幅（min-content・max-content・fit-content。`intrinsicInline`、組む前に `resolvingIntrinsicSizes` で測る）、中身を中央に寄せる、回転・拡大・移動（中心は指定できる）、合成モード（mix-blend-mode・background-blend-mode）、中身の切り抜き、ページ・段で分かれたときの辺（slice・clone）、改ページ・改段の前後、分割しない（break-inside: avoid）。罫と padding と 1 行目が入らないページ・段の末尾では始めない。
-- **行の中の箱**（`STInlineBox`）: inline 要素の padding・罫・地色を、行ごとにその文字の範囲で描く（ルビまで含めて囲める）。
-- **表**（`STTable`）: 列の長さは指定（%・pt）と中身から、行の高さはいちばん高いセルに。行の間で改ページする。縦組みでも組める。
-- **回り込み**（`.float`）: 画像を行の先頭か末尾に寄せ、横の行を短くする。
+  - 2 辺だけの罫（border-style: solid none none solid など）の角丸は、辺ごとに接する角の丸みを半分ずつ受け持ち、隣の辺とつないで曲線にする。四角い背景は画素に揃えて塗る。
+  - ページをまたぐ箱の背景（box-decoration-break: slice）は、箱全体の矩形に敷いて各ページの切れ端の形で切り取る（`STPlacedBox.sliceBefore`・`sliceAfter` が、その切れ端の前と後ろにある箱の長さ）。clone は切れ端ごと。
+  - ページの残りいっぱいの箱（`fillsPage`。電書協の天地中央・下寄せ）は、置かれたページの残りを最小の大きさにし、中身を中央に（`contentAtEnd` なら終わりに）寄せる。
+- **行の中の箱**（`STInlineBox`）: inline 要素の padding・罫・地色を、行ごとにその文字の範囲で描く（ルビまで含めて囲める）。行方向の余白（`marginStart`・`marginEnd`。縦組みでは margin-top・margin-bottom）は、負の値も含め、要素の最初の文字の前と最後の文字の後に取る。背景と罫は余白の内側に描き、文字の位置（`characters`）も余白を除いて返す。行と直交する向きの余白は行に影響しない（CSS 2 §10.6.1）。
+- **表**（`STTable`）: 列の長さは指定（%・pt）と中身から、行の高さはいちばん高いセルに。行の間で改ページする。縦組みでも組める。複数の行にまたがるセル（`rowSpan`、HTML の rowspan）は、下の行でその列を空けて次のセルを右の列に置き、またがる行の合計より高ければ最後の行を高くする。またがる行は同じページに置く。セルの中の画像も組む（幅を決めるときに数え、セルとページに収まるよう形を保って縮める）。`maxLength`（max-width、縦組みでは max-height）を超えない。
+- **回り込み**（`.float`）: 画像を行の先頭か末尾に寄せ、横の行を短くする。浮動するブロック（`STFlow.floatsAtEnd`）も同じように置く。
 - **段組**（`STColumns`）: 段数か段の幅、段間と段間罫、balance（段の長さをそろえる）と auto、段抜き。段の中の改段。このページで割れるが次のページなら収まる段組は、直前の見出しといっしょに次のページへ送る。
 - **書字方向の混在**（`STFlow`）: 横組みのページの中の縦組みのブロック（扉など）、その逆。
+  - 中身は罫と padding の内側に組み（`insets`。box-sizing: border-box なら枠の外寸）、罫・背景・角丸・影・輪郭線・背景画像を通常の箱と同じく描く（`box`。ページの `STPlacedBox` として置き、`STPlacedFlow.placedBox` が指す）。箱の回転・拡大・移動・合成モードは中身にもかける。
+  - float があれば、画像と同じく行の端に置き、脇の行を短くする（Apple Books と同じ組み方）。left・right は行頭・行末（縦組みでは上・下）。余白（`margins`。`STEdges` は before・after・start・end の 4 辺）を空け、脇の行はその外側で止まる。脇に 4 字分も残らないときはページの幅で置く。
+  - 同じ組み方向の flow は浮動のときだけ作る。1 ページに収まらないときと脇に 4 字分も残らないときは、中のブロックを本文としてそのまま組む。幅が中身から決まる flow は、いちばん長い行の長さで組み直す。
 - **書体**: 本の書体（`STFontFamily.faces`。太字・斜体・unicode-range で face を選ぶ）、等幅、欧文の本物のイタリック体、OpenType の機能（kern・liga・jp90 ほか）。欧文は単語ごとに CoreText で組み、カーニングと合字を効かせる。
 - **約物と行分け**: 行頭・行末・隣接の約物の詰め（text-spacing の space-first・trim-start・allow-end ほか）、和欧間・和数間の四分アキ、word-break（keep-all・break-all）、line-break（loose・normal・strict・anywhere）、長い単語を分けるか（overflow-wrap）、欧文のハイフネーション、行頭の始め括弧と行末の句読点のぶら下げ。
 - **ルビ（追加）**: 下側のルビ、両側ルビ、ルビの揃え（start・center・space-between・space-around）、3 字以上のグループルビの行分け、圏点の位置（over・under）と約物には付けないこと、ルビの外側の圏点。
@@ -56,6 +62,8 @@
   - 書式の `language`（lang）が中国語・韓国語のとき、漢字とハングルをその言語の書体（PingFang SC / TC / HK、宋体があればそれ、Apple SD Gothic Neo）で組む。
 - **縦中横（読み手の指定）**: `STReaderSettings.combinesDigits` で、本が指定していない縦組みの半角数字（指定の桁数まで）と !? を縦中横にする。
 - **画像（追加）**: object-fit・object-position、合成モード、不透明度（opacity は文字・背景・画像の透明度として）。
+- **行の高さ**: 1 か所（`STReaderSettings.lineHeight(of:)`）で決める。本が指定した行の高さ（`STBlockStyle.lineHeightGiven`）が `tightLineHeight`（1.5）未満なら、詰めたまま使う（年表・表・見出し）。それ以外は `minimumLineHeight` まで広げる。`followsBookLineHeights` では本の指定をそのまま使い、指定のない行は `normalLineHeight`（1.5）。
+- **語間・改行しない・影**: `STTextStyle.wordSpacing`（word-spacing。空白の幅に加える）、`noWrap`（white-space: nowrap。その文字どうしの間では改行しない）、`textShadows`（text-shadow。影を描いてから本体を描く。オフセットとぼかしはデバイス空間で指定）。
 
 ## 使い方
 
@@ -103,7 +111,8 @@ let rubies = pages[0].rubies
 | `STCharacterClass.swift` | 文字の性質（縦組みでの向き、約物、禁則、ぶら下げ、単語の文字）のキャッシュ |
 | `STTypesetter.swift` | 行に分け、詰め、揃え、ページに詰める。箱・表・回り込み・段組・書字方向の混在のレイアウト |
 | `STPageRenderer.swift` | `CGContext` に描く（箱・背景・罫・影・グラデーション・行の中の箱・ルビ・圏点・線） |
-| `STPageQueries.swift` | ページの上の文字・ルビ・ブロック・画像の位置 |
+| `STPageQueries.swift` | ページの上の文字・ルビ・ブロック・画像の位置（`pictures` は単独・回り込みの画像、`allPictures` は行の中や別の組み方向のブロックの中の画像も含めて、描く位置で返す） |
+| `STBidi.swift` | 双方向アルゴリズム（UAX #9 の主な規則）、isolate、行ごとの並べ替え |
 
 ## 速さ
 
