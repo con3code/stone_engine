@@ -111,6 +111,9 @@ public struct STTextStyle: Sendable, Hashable {
     public var wordSpacing: CGFloat = 0
     /// Lines are not broken between characters of this style (white-space: nowrap).
     public var noWrap = false
+    /// A note reference mark (合印) and the like: not parted from the character before it,
+    /// nor within itself (JLREQ 3.1.10 分割禁止), so that it does not start a line.
+    public var keepsWithPrevious = false
     /// Shadows of the characters (text-shadow), the first on top.
     public var textShadows: [STShadow] = []
     /// Painted behind the characters (an inline element's background colour).

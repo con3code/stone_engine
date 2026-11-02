@@ -284,4 +284,15 @@ final class STJLREQTests: XCTestCase {
         let short: [STInline] = [.ruby(base: [.text("日", word)], ruby: "ひ", style: word), .ruby(base: [.text("本", word)], ruby: "ほん", style: word)]
         XCTAssertEqual(page(short, em: 10).lines[0].line.block.rubies.map(\.shift), [0, 0])
     }
+
+    func testANoteReferenceIsNotPartedFromWhatItMarks() {
+        var mark = style
+        mark.keepsWithPrevious = true
+        // 「…残っている図７。」 with 図７ falling at the next line's start: the line before gives it its last character.
+        let inlines: [STInline] = [.text("あいうえお", style), .text("図７", mark), .text("。かきくけこ", style)]
+        let whole = "あいうえお図７。かきくけこ" as NSString
+        let set = page(inlines, em: 5).lines.map { whole.substring(with: NSRange($0.line.range)) }
+        XCTAssertFalse(set.contains { $0.hasPrefix("図") || $0.hasPrefix("７") }, "\(set)")
+        XCTAssertTrue(set.contains { $0.contains("お図７") }, "\(set)")
+    }
 }

@@ -782,6 +782,8 @@ public final class STTypesetter {
         let before = items[index - 1], after = items[index]
         if before.isLineBreak { return true }
         if before.style.noWrap && after.style.noWrap { return false }
+        // A note reference (合印) not parted from what it marks, nor within itself.
+        if after.style.keepsWithPrevious { return false }
         // Not inside a ruby's base: a group ruby is not parted between lines (JLREQ 3.3.6).
         if let ruby = before.ruby, ruby == after.ruby { return false }
         if let outer = before.outerRuby, outer == after.outerRuby { return false }
