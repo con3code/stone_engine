@@ -872,6 +872,19 @@ public final class STTypesetter {
         return false
     }
 
+    /// The alignment a block's lines are set in: the book's, or justified or at the start as
+    /// the reader has it where the book gives none (`STReaderSettings.justifies`).
+    func alignment(of style: STBlockStyle) -> STBlockStyle.Align {
+        guard !style.alignGiven, style.align == .start || style.align == .justify else { return style.align }
+        return settings.justifies ? .justify : .start
+    }
+
+    /// Whether a block's Latin words are hyphenated at a line's end: as the book says
+    /// (hyphens), or, where it says nothing, where its lines are justified.
+    func hyphenates(_ style: STBlockStyle) -> Bool {
+        style.hyphensGiven ? style.hyphenates : (style.hyphenates || alignment(of: style) == .justify)
+    }
+
     /// Opening punctuation (Ps, Pi), which hanging-punctuation: first hangs.
     static func opens(_ scalar: UInt32) -> Bool {
         guard let value = Unicode.Scalar(scalar) else { return false }
@@ -894,7 +907,10 @@ public final class STTypesetter {
         let lower = items[first].range.lowerBound, upper = items[last].range.upperBound
         guard upper <= word.length else { return nil }
         let text = word.substring(with: NSRange(location: lower, length: upper - lower)) as CFString
-        let locale = CFLocaleCreate(nil, CFLocaleIdentifier(rawValue: (set.block.style.language ?? "en") as CFString))
+        // In the block's language; a Latin word in Chinese, Japanese or Korean text (which have
+        // no hyphenation of their own), in English.
+        var locale = CFLocaleCreate(nil, CFLocaleIdentifier(rawValue: (set.block.style.language ?? "en") as CFString))
+        if !CFStringIsHyphenationAvailableForLocale(locale) { locale = CFLocaleCreate(nil, CFLocaleIdentifier(rawValue: "en" as CFString)) }
         guard CFStringIsHyphenationAvailableForLocale(locale) else { return nil }
         let hyphenWidth = items[index].style.size * 0.35
         // The width before the word on the line.
@@ -981,7 +997,7 @@ public final class STTypesetter {
                     var breakAt = index
                     while breakAt > start + 1, !canBreak(before: breakAt, in: items, style: spacing) { breakAt -= 1 }
                     // Hyphenated where the word allows it (hyphens: auto).
-                    if spacing.hyphenates, let hyphen = hyphenation(set, from: start, overflowing: index, width: width, available: available),
+                    if hyphenates(spacing), let hyphen = hyphenation(set, from: start, overflowing: index, width: width, available: available),
                        hyphen > breakAt || !canBreak(before: breakAt, in: items, style: spacing) {
                         set.hyphens.insert(hyphen)
                         end = hyphen
@@ -1215,8 +1231,7 @@ public final class STTypesetter {
         if set.hyphens.contains(range.upperBound) { content += items[items.count - 1].style.size * 0.35 }
         let endsParagraph = isLast || items.last?.isLineBreak == true
         // Justified, or at the start, as the reader has it where the book gives no alignment.
-        var blockAlign = style.align
-        if !style.alignGiven, blockAlign == .start || blockAlign == .justify { blockAlign = settings.justifies ? .justify : .start }
+        let blockAlign = alignment(of: style)
         let align = endsParagraph ? (blockAlign == .justify ? style.alignLast : blockAlign) : blockAlign
         var offset = inlineStart + indent
         var extra: [CGFloat] = .init(repeating: 0, count: items.count)

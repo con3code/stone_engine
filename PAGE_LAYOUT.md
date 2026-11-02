@@ -68,7 +68,7 @@
   - 表（`STTable.rightToLeft`）は 1 列目を右に置く。行の中の箱は、範囲の文字が並んだ見た目の両端で描く。
   - 単語の間に空白を置かない文字（タイ語・ラオ語・クメール語・ミャンマー語）は、システムの辞書で単語に分け、その間で改行できる。
   - 書式の `language`（lang）が中国語・韓国語のとき、漢字とハングルをその言語の書体（PingFang SC / TC / HK、宋体があればそれ、Apple SD Gothic Neo）で組む。
-- **両端揃えと和欧間（読み手の既定）**: 日本語の電子書籍に向けて、本が揃えを指定しないときは両端揃え（`STReaderSettings.justifies`、既定はオン）、和欧間・和数間を指定しないときは四分アキ（`STReaderSettings.autospaces`、既定はオン）にする。オフにすると行頭揃え・ベタ組みになる。本が指定したことは `STBlockStyle.alignGiven`・`autospaceGiven` で示し、そのときは本の指定に従う（中央・行末揃えは指定がなくてもそのまま）。和欧間の四分は字の送りとは別に持ち（`STItem.autospaceAfter`）、行末では取る。
+- **両端揃えと和欧間（読み手の既定）**: 日本語の電子書籍に向けて、本が揃えを指定しないときは両端揃え（`STReaderSettings.justifies`、既定はオン）、和欧間・和数間を指定しないときは四分アキ（`STReaderSettings.autospaces`、既定はオン）にする。オフにすると行頭揃え・ベタ組みになる。本が指定したことは `STBlockStyle.alignGiven`・`autospaceGiven` で示し、そのときは本の指定に従う（中央・行末揃えは指定がなくてもそのまま）。本がハイフンの指定（hyphens）をしていない（`STBlockStyle.hyphensGiven` が偽の）段落は、均等配置のとき欧文の単語をハイフンで分け、欧文の行が単語の間で大きく空かないようにする。段落の言語が日本語・中国語・韓国語のように辞書のない言語なら、欧文の単語は英語の辞書で分ける。和欧間の四分は字の送りとは別に持ち（`STItem.autospaceAfter`）、行末では取る。
 - **縦中横（読み手の指定）**: `STReaderSettings.combinesDigits` で、本が指定していない縦組みの半角数字（指定の桁数まで）と !? を縦中横にする。
 - **画像（追加）**: object-fit・object-position、合成モード、不透明度（opacity は文字・背景・画像の透明度として）。
 - **行の高さ**: 1 か所（`STReaderSettings.lineHeight(of:)`）で決める。本が指定した行の高さ（`STBlockStyle.lineHeightGiven`）が `tightLineHeight`（1.5）未満なら、詰めたまま使う（年表・表・見出し）。それ以外は `minimumLineHeight` まで広げる。`followsBookLineHeights` では本の指定をそのまま使い、指定のない行は `normalLineHeight`（1.5）。

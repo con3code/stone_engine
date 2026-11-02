@@ -278,6 +278,9 @@ public struct STBlockStyle: Sendable, Hashable {
     public var lineBreak: STLineBreak? = nil
     public var breaksLongWords: Bool? = nil
     public var hyphenates = false
+    /// Whether the book said whether to hyphenate (hyphens): where it did not, a justified
+    /// block's Latin words are hyphenated, so that its lines are not spread wide.
+    public var hyphensGiven = false
     /// The paragraph's direction (CSS direction, dir): its lines start on the right where
     /// it is right to left; auto takes it from its first strong letter (dir="auto").
     public var direction: STTextDirection = .ltr

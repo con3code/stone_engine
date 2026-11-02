@@ -295,4 +295,27 @@ final class STJLREQTests: XCTestCase {
         XCTAssertFalse(set.contains { $0.hasPrefix("図") || $0.hasPrefix("７") }, "\(set)")
         XCTAssertTrue(set.contains { $0.contains("お図７") }, "\(set)")
     }
+
+    // MARK: 欧文の均等配置
+
+    func testAJustifiedBlocksLatinWordsAreHyphenatedUnlessTheBookSaysNot() {
+        let text = "Translations include Toshihiko Izutsu’s Language and Magic, supervised by the translator, published by the university press."
+        func hyphens(_ style: STBlockStyle, settings: STReaderSettings = STReaderSettings()) -> Int {
+            let block = STBlock(inlines: [.text(text, self.style)], style: style)
+            let section = STSection(blocks: [block], writingMode: .horizontal)
+            let pages = STTypesetter(settings: { var s = settings; s.hangsPunctuation = false; return s }())
+                .paginate(section, geometry: STPageGeometry(size: CGSize(width: size * 9 + 40, height: 800), top: 20, left: 20, bottom: 20, right: 20))
+            return pages[0].lines.first?.line.block.hyphens.count ?? 0
+        }
+        var japanese = STBlockStyle()
+        japanese.language = "ja"
+        XCTAssertGreaterThan(hyphens(japanese), 0, "justified, and in English though the book is Japanese")
+        var none = japanese
+        none.hyphensGiven = true
+        none.hyphenates = false
+        XCTAssertEqual(hyphens(none), 0, "hyphens: none")
+        var start = STReaderSettings()
+        start.justifies = false
+        XCTAssertEqual(hyphens(japanese, settings: start), 0, "set at the start: not hyphenated")
+    }
 }
