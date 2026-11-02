@@ -43,7 +43,8 @@ struct STCharacterClass: @unchecked Sendable {
         let character = Character(scalar)
         let properties = scalar.properties
         let ideographic = properties.isIdeographic || isKanaOrFullwidth(value)
-        let space = properties.isWhitespace && value != 0x3000
+        // Not the ideographic space, nor the no-break ones (NBSP, the narrow and figure spaces).
+        let space = properties.isWhitespace && ![0x3000, 0xA0, 0x202F, 0x2007].contains(value)
         // Letters and digits, and the apostrophe inside a word ("don't").
         // Characters set upright in vertical lines (Ⅰ, ℃) are not: lines break around them.
         let wordLetter = !ideographic && !space && !isUpright(value)

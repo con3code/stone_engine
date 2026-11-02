@@ -57,7 +57,10 @@ struct STItem: @unchecked Sendable {
     /// A word starts with it in a script written without spaces (Thai): a line may break before it.
     var wordStart = false
 
-    var squeezedAdvance: CGFloat { advance - startTrim - endTrim }
+    /// 和欧間 after it (a quarter em): apart from its advance, so that a line's end does not
+    /// keep it and the line's adjustment can take it in or out.
+    var autospaceAfter: CGFloat = 0
+    var squeezedAdvance: CGFloat { advance - startTrim - endTrim + autospaceAfter }
 
     var isSpace: Bool {
         if case .glyphs = kind { return characterClass.space }
@@ -78,6 +81,9 @@ struct STRuby: @unchecked Sendable {
     var shapes: [STShape]
     /// How long the ruby is along the line.
     var length: CGFloat
+    /// How far the ruby stands off its base's middle, towards the base's end where positive:
+    /// a ruby overhanging only the kana on one side (JLREQ 3.3.8).
+    var shift: CGFloat = 0
 }
 
 /// A block's items, shaped once and shared by the lines and pages made of them.
@@ -330,18 +336,21 @@ public final class STTypesetter {
     }
 
     /// Ruby longer than its base: the ruby overhangs the kana beside it without ruby of its own
-    /// by up to one ruby character on each side; what is left over the base takes, half before
-    /// it and half after, its glyphs in the middle.
+    /// by up to one ruby character on each side, and nothing else (JLREQ 3.3.8): half of what
+    /// it is longer on each side where both have kana, more on one where the other has none.
+    /// What is left over the base takes, half before it and half after, its glyphs in the
+    /// middle; the ruby stands off its middle by the difference of its overhangs.
     private func spreadRubies(_ set: STSetBlock) {
-        for ruby in set.rubies {
+        for rubyIndex in set.rubies.indices {
+            let ruby = set.rubies[rubyIndex]
             let range = ruby.items
             guard !range.isEmpty else { continue }
             let baseLength = set.items[range].reduce(CGFloat(0)) { $0 + $1.squeezedAdvance }
             let extra = ruby.length - baseLength
             guard extra > 0.01 else { continue }
-            func overhang(_ index: Int) -> CGFloat {
+            func room(_ index: Int) -> CGFloat {
                 guard set.items.indices.contains(index), set.items[index].ruby == nil, Self.isKana(set.items[index].scalar) else { return 0 }
-                return min(ruby.style.size, extra / 2)
+                return ruby.style.size
             }
             if ruby.style.rubyAlign == .spaceBetween, range.count > 1 {
                 // The base spread to the ruby's length, evenly between its characters.
@@ -349,7 +358,17 @@ public final class STTypesetter {
                 for index in range.dropLast() { set.items[index].advance += each }
                 continue
             }
-            let pad = max(0, extra - overhang(range.lowerBound - 1) - overhang(range.upperBound))
+            let roomBefore = room(range.lowerBound - 1), roomAfter = room(range.upperBound)
+            var before = min(roomBefore, extra / 2), after = min(roomAfter, extra / 2)
+            var rest = extra - before - after
+            let moreBefore = min(roomBefore - before, rest)
+            before += moreBefore
+            rest -= moreBefore
+            let moreAfter = min(roomAfter - after, rest)
+            after += moreAfter
+            rest -= moreAfter
+            set.rubies[rubyIndex].shift = (after - before) / 2
+            let pad = max(0, rest)
             if ruby.style.rubyAlign == .spaceAround, range.count > 1 {
                 // Group ruby longer than its base: the base's characters spread under it, a
                 // full share between them and half one at each end (1:2:1, ruby-align: space-around).
@@ -582,10 +601,12 @@ public final class STTypesetter {
         return end
     }
 
-    /// 和欧間: a quarter em between Japanese and Latin letters (or digits), where the block asks
-    /// for it (text-spacing: ideograph-alpha, ideograph-numeric).
+    /// 和欧間: a quarter em between Japanese and Latin letters (or digits) (JLREQ 3.2.6), where
+    /// the block asks for it (text-spacing: ideograph-alpha, ideograph-numeric), or where it
+    /// says nothing of it and the reader has it (`STReaderSettings.autospaces`).
     private func autospace(_ set: STSetBlock) {
-        let style = set.block.style
+        var style = set.block.style
+        if !style.autospaceGiven { (style.autospaceAlpha, style.autospaceNumeric) = (settings.autospaces, settings.autospaces) }
         guard style.autospaceAlpha || style.autospaceNumeric else { return }
         func kind(_ item: STItem) -> Int {
             guard case .glyphs = item.kind, !item.isSpace else { return 0 }
@@ -600,20 +621,23 @@ public final class STTypesetter {
             let pair = Set([a, b])
             guard pair.contains(1), (style.autospaceAlpha && pair.contains(2)) || (style.autospaceNumeric && pair.contains(3)) else { continue }
             let quarter = min(set.items[index].style.size, set.items[index + 1].style.size) / 4
-            set.items[index].advance += quarter
+            set.items[index].autospaceAfter = quarter
         }
     }
 
-    /// 約物の詰め (stone mode): a closing mark followed by punctuation, and an opening mark
-    /// after punctuation, take half their width. Only fullwidth marks, which have the empty
-    /// half to give.
+    /// 約物の詰め (stone mode): a closing mark followed by a closing mark or a middle dot, and
+    /// an opening mark after punctuation, take half their width (JLREQ 3.1.4, CSS's
+    /// trim-adjacent): 」」 。」 」・ and 「「 」「 、「 are 1.5em; a closing mark before an
+    /// opening one keeps its half, the half em between them. Only fullwidth marks, which have
+    /// the empty half to give.
     private func squeeze(_ set: STSetBlock) {
         let items = set.items
         for index in items.indices {
             let punctuation = items[index].characterClass.punctuation
             guard punctuation != .whole, case .glyphs = items[index].kind, !items[index].sideways else { continue }
             let half = items[index].style.size / 2
-            if punctuation == .firstHalf, index + 1 < items.count, items[index + 1].characterClass.punctuation != .whole {
+            if punctuation == .firstHalf, index + 1 < items.count,
+               [.firstHalf, .quarter].contains(items[index + 1].characterClass.punctuation) {
                 set.items[index].endTrim = half
             }
             if punctuation == .secondHalf, index > 0, items[index - 1].characterClass.punctuation != .whole {
@@ -625,9 +649,13 @@ public final class STTypesetter {
     // MARK: Lines
 
     /// Small kana and the like: lines may start with them where 禁則 is not strict.
-    private static let smallKana: Set<UInt32> = Set("ァィゥェォッャュョヮヵヶぁぃぅぇぉっゃゅょゎゕゖㇰㇱㇲㇳㇴㇵㇶㇷㇸㇹㇺㇻㇼㇽㇾㇿ".unicodeScalars.map(\.value))
+    private static let smallKana: Set<UInt32> = Set("ァィゥェォッャュョヮヵヶぁぃぅぇぉっゃゅょゎゕゖㇰㇱㇲㇳㇴㇵㇶㇷㇸㇹㇺㇻㇼㇽㇾㇿｧｨｩｪｫｬｭｮｯ".unicodeScalars.map(\.value))
     /// The prolonged sound mark, iteration marks: lines may start with them where it is loose.
-    private static let looseStarters: Set<UInt32> = Set("ーヽヾゝゞ々〻".unicodeScalars.map(\.value))
+    /// What line-break: normal lets a line start with besides small kana, as CSS Text says for
+    /// Japanese: the prolonged sound mark and the hyphens ‐ – 〜 ゠.
+    private static let normalStarters: Set<UInt32> = Set("ーｰ‐–〜～゠".unicodeScalars.map(\.value))
+    /// And line-break: loose, besides those: the iteration marks and the middle dots.
+    private static let looseStarters: Set<UInt32> = Set("ヽヾゝゞ々〻・･：；".unicodeScalars.map(\.value))
 
     /// Whether a line may break between `items[index - 1]` and `items[index]`, as the block's
     /// word-break and line-break say.
@@ -635,10 +663,8 @@ public final class STTypesetter {
         let before = items[index - 1], after = items[index]
         if before.isLineBreak { return true }
         if before.style.noWrap && after.style.noWrap { return false }
-        if let ruby = before.ruby, ruby == after.ruby {
-            // Inside a group ruby: only one of more than two characters, which may run on to the next line.
-            guard let set = currentSet, set.rubies.indices.contains(ruby), set.rubies[ruby].items.count > 2 else { return false }
-        }
+        // Not inside a ruby's base: a group ruby is not parted between lines (JLREQ 3.3.6).
+        if let ruby = before.ruby, ruby == after.ruby { return false }
         if let outer = before.outerRuby, outer == after.outerRuby { return false }
         if after.isSpace { return false }
         if before.isSpace { return true }
@@ -648,15 +674,27 @@ public final class STTypesetter {
         if settings.kinsoku {
             var notStarting = after.characterClass.notStarting
             switch style.lineBreak {
-            case .normal?: if Self.smallKana.contains(after.scalar) { notStarting = false }
-            case .loose?: if Self.smallKana.contains(after.scalar) || Self.looseStarters.contains(after.scalar) { notStarting = false }
-            case .strict?: if after.scalar == 0x30FC { notStarting = true }
+            case .normal?:
+                if Self.smallKana.contains(after.scalar) || Self.normalStarters.contains(after.scalar) { notStarting = false }
+            case .loose?:
+                if Self.smallKana.contains(after.scalar) || Self.normalStarters.contains(after.scalar)
+                    || Self.looseStarters.contains(after.scalar) { notStarting = false }
             default: break
             }
             if notStarting || before.characterClass.notEnding { return false }
         }
-        // 分離禁止: the halves of ……, ――, ‥‥ stay together.
+        // 分離禁止: the halves of ……, ――, ‥‥ stay together, and of the くの字点 〳〵 and 〴〵.
         if before.scalar == after.scalar, Self.inseparable.contains(before.scalar) { return false }
+        if before.scalar == 0x3033 || before.scalar == 0x3034, after.scalar == 0x3035 { return false }
+        // The no-break spaces (NBSP, the narrow and figure ones), the word joiner and the
+        // zero-width no-break space join what is either side.
+        let joiners: Set<UInt32> = [0xA0, 0x202F, 0x2007, 0x2060, 0xFEFF]
+        if joiners.contains(before.scalar) || joiners.contains(after.scalar) { return false }
+        // 分割禁止 (JLREQ 3.1.10): a number with its points, commas and colons (3.14, 1,000,
+        // 12:30), with a currency sign before it (¥1000, $25), and in horizontal lines one in
+        // full-width digits with its signs (２０２６, ５０％, ￥１００); an abbreviation's or an
+        // address's points (U.S.A., e.g., example.com).
+        if Self.joinsNumber(before: index, in: items, vertical: currentSet?.vertical ?? false) { return false }
         switch style.wordBreak {
         case .breakAll:
             if before.shape != nil && after.shape != nil { return true }
@@ -673,6 +711,37 @@ public final class STTypesetter {
         if case .image = after.kind { return true }
         // A hyphen or a dash ends a line after it.
         return before.shape != nil && !before.characterClass.wordLetter
+    }
+
+    private static func isDigit(_ scalar: UInt32) -> Bool { (0x30...0x39).contains(scalar) }
+    private static func isWideDigit(_ scalar: UInt32) -> Bool { (0xFF10...0xFF19).contains(scalar) }
+    private static func isLetter(_ scalar: UInt32) -> Bool {
+        Unicode.Scalar(scalar).map { $0.properties.isAlphabetic && !$0.properties.isIdeographic && scalar < 0x2E80 } ?? false
+    }
+    private static let numberJoiners: Set<UInt32> = [0x2E, 0x2C, 0x3A]
+    private static let currencies: Set<UInt32> = [0x24, 0xA2, 0xA3, 0xA5, 0x20AC, 0x20A9, 0x20B9, 0x23]
+    private static let wideCurrencies: Set<UInt32> = [0xFF04, 0xFFE5, 0xFFE1, 0xFF03]
+    private static let wideAfterNumber: Set<UInt32> = [0xFF05, 0x2103, 0x2030, 0xFFE0]
+
+    /// Whether a line may not break before `items[index]` for being inside a number or an
+    /// abbreviation (分割禁止).
+    static func joinsNumber(before index: Int, in items: [STItem], vertical: Bool) -> Bool {
+        guard index > 0, index < items.count else { return false }
+        let a = items[index - 1].scalar, b = items[index].scalar
+        let beforeA = index > 1 ? items[index - 2].scalar : nil
+        // 3.14, 1,000, 12:30: a point, comma or colon between digits.
+        if isDigit(b), numberJoiners.contains(a), let beforeA, isDigit(beforeA) { return true }
+        // ¥1000, $25.
+        if currencies.contains(a), isDigit(b) { return true }
+        // U.S.A., e.g., example.com: a point between letters.
+        if a == 0x2E, isLetter(b), let beforeA, isLetter(beforeA) { return true }
+        if !vertical {
+            if isWideDigit(a) && isWideDigit(b) { return true }
+            if isWideDigit(a) && wideAfterNumber.contains(b) { return true }
+            if wideCurrencies.contains(a) && isWideDigit(b) { return true }
+            if isWideDigit(b), [0xFF0E, 0xFF0C, 0xFF1A].contains(a), let beforeA, isWideDigit(beforeA) { return true }
+        }
+        return false
     }
 
     /// Opening punctuation (Ps, Pi), which hanging-punctuation: first hangs.
@@ -750,19 +819,30 @@ public final class STTypesetter {
                    !items[index].sideways, items[index].startTrim == 0 {
                     advance -= items[index].style.size / 2
                 }
+                // What it takes ending the line: no 和欧間 after it there.
+                let ending = advance - items[index].autospaceAfter
                 // A closing mark that holds the line only trimmed: kept on it, trimmed (allow-end, trim-end).
-                if width + advance > available + 0.01, index > start, spacing.spacingEnd != .space, settings.squeezesPunctuation,
+                if width + ending > available + 0.01, index > start, spacing.spacingEnd != .space, settings.squeezesPunctuation,
                    items[index].characterClass.punctuation == .firstHalf, !items[index].sideways, items[index].endTrim == 0,
-                   width + advance - items[index].style.size / 2 <= available + 0.01,
+                   width + ending - items[index].style.size / 2 <= available + 0.01,
                    index + 1 >= items.count || canBreak(before: index + 1, in: items, style: spacing) {
                     end = index + 1
                     break
                 }
-                if width + advance > available + 0.01, index > start {
+                if width + ending > available + 0.01, index > start {
                     // 、。 may hang past the end; spaces never push a line.
                     if items[index].isSpace || ((spacing.hangsEnd ?? settings.hangsPunctuation) && items[index].characterClass.hangs
                         && (index + 1 >= items.count || canBreak(before: index + 1, in: items, style: spacing))) {
                         end = index + 1
+                        break
+                    }
+                    // 追い込み before 追い出し (JLREQ 3.8.2): where the line may not end before this
+                    // item (禁則, 分離禁止), it and what may not be parted from it are taken in where
+                    // squeezing the line's punctuation and spaces makes room for them.
+                    if !canBreak(before: index, in: items, style: spacing), settings.squeezesPunctuation,
+                       let taken = pushedIn(items, from: start, overflowing: index, width: width, available: available, style: spacing,
+                                            startTrimmed: trimsStart) {
+                        end = taken
                         break
                     }
                     var breakAt = index
@@ -796,6 +876,119 @@ public final class STTypesetter {
         return lines
     }
 
+    // MARK: Adjusting lines (JLREQ 3.8)
+
+    /// How much an item's spacing may give where a line is squeezed, in JLREQ 3.8.3's order:
+    /// 0 a space between words (to a quarter em), 1 a middle dot's quarters, 2 the empty half
+    /// of a bracket or a comma (not of a full stop, but at the line's end), 3 和欧間 (to an
+    /// eighth). The empty halves already given (詰め) give no more.
+    private func squeezable(_ item: STItem, step: Int, atEnd: Bool) -> CGFloat {
+        guard case .glyphs = item.kind, !item.sideways || item.isSpace else { return 0 }
+        let size = item.style.size
+        switch step {
+        case 0:
+            return item.isSpace && item.scalar != 0x3000 ? max(0, item.squeezedAdvance - size / 4) : 0
+        case 1:
+            return item.characterClass.punctuation == .quarter && item.startTrim == 0 && item.endTrim == 0 && item.advance >= size * 0.9 ? size / 2 : 0
+        case 2:
+            switch item.characterClass.punctuation {
+            case .firstHalf:
+                // A full stop keeps its half but at the line's end.
+                let fullStop = item.scalar == 0x3002 || item.scalar == 0xFF0E
+                return item.endTrim == 0 && (!fullStop || atEnd) ? size / 2 : 0
+            case .secondHalf: return item.startTrim == 0 ? size / 2 : 0
+            default: return 0
+            }
+        default:
+            return max(0, item.autospaceAfter - size / 8)
+        }
+    }
+
+    /// Where a line overflowing at `index`, which may not start the next line, ends taken in
+    /// (追い込み): the end of what may not be parted from it, where squeezing the line from
+    /// `start` makes room for it all; nil where it does not.
+    private func pushedIn(_ items: [STItem], from start: Int, overflowing index: Int, width: CGFloat, available: CGFloat,
+                          style: STBlockStyle, startTrimmed: Bool) -> Int? {
+        var end = index + 1
+        while end < items.count, end - index < 4, !canBreak(before: end, in: items, style: style) { end += 1 }
+        guard end >= items.count || canBreak(before: end, in: items, style: style) else { return nil }
+        var total = width
+        for i in index..<end { total += items[i].squeezedAdvance }
+        total -= items[end - 1].autospaceAfter
+        let over = total - available
+        guard over > 0.01 else { return end }
+        var room: CGFloat = 0
+        for i in start..<end {
+            for step in 0...3 where !(step == 2 && i == start && startTrimmed) { room += squeezable(items[i], step: step, atEnd: i == end - 1) }
+        }
+        return room + 0.01 >= over ? end : nil
+    }
+
+    /// Squeezes a line too long by `amount`, step by step in JLREQ 3.8.3's order, each step's
+    /// items alike for their share; how much it took in.
+    private func squeezeLine(_ items: [STItem], trailing: Int, from first: Int, by amount: CGFloat, given: Set<Int>,
+                             starts: inout [CGFloat], advances: inout [CGFloat]) -> CGFloat {
+        var left = amount
+        for step in 0...3 where left > 0.01 {
+            let room = (first..<trailing).map { step == 2 && given.contains($0) ? 0 : squeezable(items[$0], step: step, atEnd: $0 == trailing - 1) }
+            let total = room.reduce(0, +)
+            guard total > 0 else { continue }
+            let share = min(1, left / total)
+            for (offset, give) in room.enumerated() where give > 0 {
+                let i = first + offset, taken = give * share
+                advances[i] -= taken
+                // The empty space before an opening mark, and half of a middle dot's, is before it.
+                switch items[i].characterClass.punctuation {
+                case .secondHalf where step == 2: starts[i] += taken
+                case .quarter where step == 1: starts[i] += taken / 2
+                default: break
+                }
+            }
+            left -= total * share
+        }
+        return amount - max(0, left)
+    }
+
+    /// The space a justified line is lengthened by, after each item, in JLREQ 3.8.4's order:
+    /// the spaces between words to half an em, 和欧間 to half an em, then the gaps between
+    /// Japanese characters alike; not inside a word, a ruby base, a pair not to be parted, nor
+    /// after an opening mark or before a closing one (JLREQ 3.1.11). A line with no such gaps
+    /// takes the rest at its spaces; one with neither is left as it is.
+    private func spread(_ items: [STItem], trailing: Int, from first: Int, by slack: CGFloat, advances: [CGFloat]) -> [CGFloat] {
+        var extra = [CGFloat](repeating: 0, count: items.count)
+        let gaps = first..<max(first, trailing - 1)
+        var left = slack
+        func give(_ caps: [(index: Int, cap: CGFloat)]) {
+            let total = caps.reduce(0) { $0 + $1.cap }
+            guard total > 0, left > 0.01 else { return }
+            let share = min(1, left / total)
+            for entry in caps { extra[entry.index] += entry.cap * share }
+            left -= total * share
+        }
+        let spaces = gaps.filter { items[$0].isSpace && items[$0].scalar != 0x3000 }
+        give(spaces.map { ($0, max(0, items[$0].style.size / 2 - advances[$0])) })
+        give(gaps.filter { items[$0].autospaceAfter > 0 }.map { ($0, items[$0].style.size / 4) })
+        let hasIdeographs = items[..<trailing].contains { $0.characterClass.ideographic }
+        let between = hasIdeographs ? gaps.filter { i in
+            let a = items[i], b = items[i + 1]
+            if a.isSpace || b.isSpace { return false }
+            if let ruby = a.ruby, ruby == b.ruby { return false }
+            if a.characterClass.wordLetter && b.characterClass.wordLetter { return false }
+            if a.characterClass.punctuation == .secondHalf || b.characterClass.punctuation == .firstHalf { return false }
+            if a.scalar == b.scalar, Self.inseparable.contains(a.scalar) { return false }
+            if a.scalar == 0x3033 || a.scalar == 0x3034, b.scalar == 0x3035 { return false }
+            return true
+        } : []
+        if !between.isEmpty {
+            let each = left / CGFloat(between.count)
+            for i in between { extra[i] += each }
+        } else if !spaces.isEmpty, left > 0.01 {
+            let each = left / CGFloat(spaces.count)
+            for i in spaces { extra[i] += each }
+        }
+        return extra
+    }
+
     /// Places a line's items along it: the indent, the alignment, the squeezing at its ends,
     /// justified where the block is (spaces stretched first, then the gaps between ideographs).
     func setLine(_ set: STSetBlock, items range: Range<Int>, isFirst: Bool, isLast: Bool, inlineStart: CGFloat, measure: CGFloat) -> (positions: [CGFloat], advances: [CGFloat]) {
@@ -804,11 +997,14 @@ public final class STTypesetter {
         var starts = [CGFloat](repeating: 0, count: advances.count)
         let items = Array(set.items[range])
         guard !items.isEmpty else { return ([], []) }
+        // The marks that have given their empty half at the line's ends: no more of them.
+        var given = Set<Int>()
         if settings.squeezesPunctuation {
             let trimsStart = style.spacingStart == .trim || (style.spacingStart == .first && !(isFirst && range.lowerBound == 0))
             if trimsStart, items[0].characterClass.punctuation == .secondHalf, !items[0].sideways, items[0].startTrim == 0 {
                 starts[0] = items[0].style.size / 2
                 advances[0] -= starts[0]
+                given.insert(0)
             }
             // A closing mark at the line's end gives its empty half: always (trim-end), or
             // where the line would not hold it otherwise (allow-end).
@@ -817,19 +1013,25 @@ public final class STTypesetter {
                 let full = advances.reduce(0, +) - (items.last?.isLineBreak == true ? 0 : 0)
                 let indent = isFirst ? style.textIndent : 0
                 switch style.spacingEnd {
-                case .trim: advances[last] -= items[last].style.size / 2
-                case .allow: if full > measure - indent + 0.01 { advances[last] -= items[last].style.size / 2 }
+                case .trim:
+                    advances[last] -= items[last].style.size / 2
+                    given.insert(last)
+                case .allow:
+                    if full > measure - indent + 0.01 {
+                        advances[last] -= items[last].style.size / 2
+                        given.insert(last)
+                    }
                 case .space: break
                 }
             }
         }
         // Spaces at the end of a line and a line break take no room; a hanging mark stands outside.
-        var used = advances.reduce(0, +)
         var trailing = items.count
-        while trailing > 0, items[trailing - 1].isSpace || items[trailing - 1].isLineBreak {
-            trailing -= 1
-            used -= advances[trailing]
-        }
+        while trailing > 0, items[trailing - 1].isSpace || items[trailing - 1].isLineBreak { trailing -= 1 }
+        // No 和欧間 at the line's end.
+        if trailing > 0 { advances[trailing - 1] -= items[trailing - 1].autospaceAfter }
+        var used = advances.reduce(0, +)
+        for index in trailing..<items.count { used -= advances[index] }
         var hanging: CGFloat = 0
         if trailing > 0, items[trailing - 1].characterClass.hangs, used > measure + 0.01 {
             hanging = advances[trailing - 1]
@@ -854,32 +1056,24 @@ public final class STTypesetter {
         // A hyphen after a word broken at the line's end takes room on it.
         if set.hyphens.contains(range.upperBound) { content += items[items.count - 1].style.size * 0.35 }
         let endsParagraph = isLast || items.last?.isLineBreak == true
-        let align = endsParagraph ? (style.align == .justify ? style.alignLast : style.align) : style.align
+        // Justified, or at the start, as the reader has it where the book gives no alignment.
+        var blockAlign = style.align
+        if !style.alignGiven, blockAlign == .start || blockAlign == .justify { blockAlign = settings.justifies ? .justify : .start }
+        let align = endsParagraph ? (blockAlign == .justify ? style.alignLast : blockAlign) : blockAlign
         var offset = inlineStart + indent
         var extra: [CGFloat] = .init(repeating: 0, count: items.count)
+        // Longer than the line (taken in, 追い込み): squeezed as JLREQ 3.8.3 orders it.
+        if settings.squeezesPunctuation, content > available + 0.01 {
+            content -= squeezeLine(items, trailing: trailing, from: markerCount, by: content - available, given: given,
+                                   starts: &starts, advances: &advances)
+        }
         let slack = available - content
         switch align {
         case .start: break
         case .center: offset += max(0, slack / 2)
         case .end: offset += max(0, slack)
         case .justify:
-            if slack > 0.01, trailing > 1 {
-                // A line with Japanese in it is spread between its characters and at its
-                // spaces alike (inside words and ruby bases not); a line of words only at its
-                // spaces; a line with neither is left as it is.
-                let hasIdeographs = items[..<trailing].contains { $0.characterClass.ideographic }
-                let chosen = hasIdeographs
-                    ? (markerCount..<max(markerCount, trailing - 1)).filter { i in
-                        let a = items[i], b = items[i + 1]
-                        if let ruby = a.ruby, ruby == b.ruby { return false }
-                        return !(a.characterClass.wordLetter && b.characterClass.wordLetter)
-                    }
-                    : (markerCount..<max(markerCount, trailing - 1)).filter { items[$0].isSpace }
-                if !chosen.isEmpty {
-                    let each = slack / CGFloat(chosen.count)
-                    for i in chosen { extra[i] = each }
-                }
-            }
+            if slack > 0.01, trailing > 1 { extra = spread(items, trailing: trailing, from: markerCount, by: slack, advances: advances) }
         }
         var positions: [CGFloat] = []
         var position = offset
@@ -1034,8 +1228,12 @@ public final class STTypesetter {
             overMarks = max(overMarks, itemOver)
             underMarks = max(underMarks, itemUnder)
         }
-        over = max(over, overMarks)
-        under = max(under, underMarks)
+        // They stand in the space between the lines, the line before's half of it too (JLREQ
+        // 4.5.1: the line pitch kept where ruby is): the line is made larger only where the
+        // whole of the leading does not hold them.
+        let leading = max(0, extent - emSize)
+        over = max(over, overMarks - leading / 2)
+        under = max(under, underMarks - leading / 2)
         // Images larger than the em box: across, one stands on the em box's foot and pushes the
         // line out on the over side; down, one is centred on the line and pushes it out on both.
         for item in items where item.across > emSize {

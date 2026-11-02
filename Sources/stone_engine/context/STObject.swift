@@ -465,7 +465,7 @@ public enum STPunctuation: Int, CaseIterable {
     case secondHalf
     case quarter
     
-    public static let firstHalfPunctuationCharSet = CharacterSet(charactersIn: "、。）］｝〕〉》」』】〙〗〟｠")
+    public static let firstHalfPunctuationCharSet = CharacterSet(charactersIn: "、。，．）］｝〕〉》」』】〙〗〟｠")
     public static let secondHalfPunctuationCharSet = CharacterSet(charactersIn: "（［｛〔〈《「『【〘〖〝｟")
     public static let quarterPunctuationCharSet = CharacterSet(charactersIn: "・：；")
 
@@ -486,8 +486,12 @@ public enum STPunctuationMode: Int, CaseIterable {
 }
 
 public enum STKinsoku {
-    static let notStartingCharSet = CharacterSet(charactersIn: " ,.?:;!)）]］｝、〕〉》」』】〙〗〟’”｠»ヽヾァィゥェォッャュョヮヵヶぁぃぅぇぉっゃゅょゎゕゖㇰㇱㇲㇳㇴㇵㇶㇷㇸㇹㇺㇻㇼㇽㇾㇿ々〻？!‼⁇⁈⁉。.™")
-    static let notEndingCharSet = CharacterSet(charactersIn: "(（[［｛〔〈《「『【〘〖〝‘“｟«\"'")
+    /// 行頭禁則: the characters a line does not start with, all of JLREQ's classes for them
+    /// (the strict rule, CSS's line-break: strict): closing brackets, hyphens (‐ – 〜 ゠),
+    /// dividing punctuation (？！‼⁇⁈⁉), middle dots (・：；), full stops and commas (。．、，),
+    /// iteration marks (ヽヾゝゞ々〻), the prolonged sound mark ー and small kana.
+    static let notStartingCharSet = CharacterSet(charactersIn: " ,.?:;!)）]］}｝｣、〕〉》」』】〙〗〟’”｠⦆»ヽヾゝゞーｰァィゥェォッャュョヮヵヶぁぃぅぇぉっゃゅょゎゕゖㇰㇱㇲㇳㇴㇵㇶㇷㇸㇹㇺㇻㇼㇽㇾㇿｧｨｩｪｫｬｭｮｯ々〻？！!‼⁇⁈⁉。．.｡，、､・･：；‐–〜～゠™")
+    static let notEndingCharSet = CharacterSet(charactersIn: "(（[［{｛｢〔〈《「『【〘〖〝‘“｟⦅«\"'")
     static let hangingCharSet = CharacterSet(charactersIn: "、。")
     
 }

@@ -257,6 +257,12 @@ public struct STBlockStyle: Sendable, Hashable {
     public var trimsAdjacent = true
     public var autospaceAlpha = false
     public var autospaceNumeric = false
+    /// Whether the book said whether to space Japanese and Latin (text-autospace,
+    /// text-spacing): where it did not, the reader's `STReaderSettings.autospaces` holds.
+    public var autospaceGiven = false
+    /// Whether the book gave the alignment (text-align): where it did not, a block left at
+    /// start or justify is set as the reader's `STReaderSettings.justifies` says.
+    public var alignGiven = false
     /// Where lines may break: word-break, line-break (nil: the reader's 禁則), whether a
     /// word longer than a line is broken (overflow-wrap; nil: broken, so nothing runs off
     /// the page), hyphenated (hyphens: auto, in `language`).
@@ -483,6 +489,12 @@ public struct STReaderSettings: Sendable, Hashable {
     public var kinsoku = true
     /// 、。 may stand past the line's end (ぶら下げ) rather than be pushed to the next line.
     public var hangsPunctuation = true
+    /// Lines justified (両端揃え) where the book gives no alignment, as Japanese books are set;
+    /// off, they are set at the start.
+    public var justifies = true
+    /// A quarter em between Japanese and Latin letters and digits (和欧間の四分アキ) where the
+    /// book does not say; off, they are set solid.
+    public var autospaces = true
     /// 縦中横 the reader asks for where the book gives none: in a vertical line of mixed
     /// orientation, a run of up to this many ASCII digits standing apart (not part of a word,
     /// a decimal or a time), and one or two of ! and ?, set upright side by side in one

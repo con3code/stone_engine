@@ -1035,7 +1035,15 @@ public enum STPageRenderer {
                 ? emStart + line.emSize + (rubyUnder == true ? rubySize : 0) + markStyle.size / 2
                 : emStart - (rubyUnder == false ? rubySize : 0) - markStyle.size / 2
             let centre = mapper.point(inline: centreAlong, block: centreAcross)
-            drawGlyphs(shape, at: CGPoint(x: centre.x - shape.advance / 2, y: centre.y - markStyle.size / 2 + markStyle.size * ascentRatio), context: context)
+            var origin = CGPoint(x: centre.x - shape.advance / 2, y: centre.y - markStyle.size / 2 + markStyle.size * ascentRatio)
+            // The mark's ink in the middle of the character's side (JLREQ 3.3.9), not its em
+            // box: the sesame dot's glyph stands to one side of its own.
+            if let glyph = shape.glyphs.first {
+                var id = glyph.glyph
+                let ink = CTFontGetBoundingRectsForGlyphs(glyph.font, .horizontal, &id, nil, 1)
+                if !ink.isEmpty, ink.width > 0 { origin = CGPoint(x: centre.x - glyph.offset - ink.midX, y: centre.y + ink.midY) }
+            }
+            drawGlyphs(shape, at: origin, context: context)
         }
     }
 
@@ -1084,7 +1092,16 @@ public enum STPageRenderer {
             let total = lengths.reduce(0, +)
             let span = end - start
             var gap: CGFloat = 0
-            var along = start + (span - total) / 2
+            var along = start + (span - total) / 2 + (total > span ? whole.shift : 0)
+            // Not before the line's start nor past its end: the kana it would overhang are on
+            // the line before or after.
+            if total > span {
+                let lineStart = line.positions[0] + set.items[line.items.lowerBound].startTrim
+                let lastIndex = line.items.upperBound - 1
+                let lineEnd = line.positions[line.items.count - 1] + set.items[lastIndex].startTrim + line.advances[line.items.count - 1]
+                if first == 0 { along = max(along, min(lineStart, start)) }
+                if line.items.lowerBound + last == lastIndex { along = min(along, max(lineEnd, end) - total) }
+            }
             if total < span, !lengths.isEmpty {
                 switch ruby.style.rubyAlign {
                 case .start: along = start
