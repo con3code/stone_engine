@@ -33,8 +33,26 @@ public struct STPlacedRuby: Sendable, Hashable {
 
 extension STPage {
     /// The page's characters, line by line in reading order; images on their own are included.
-    public func characters(geometry: STPageGeometry, writingMode: STWritingMode) -> [STPlacedCharacter] {
-        characters(mapper: STPageRenderer.Mapper(content: geometry.content, vertical: writingMode == .vertical))
+    /// With the section's `boxes`, a character in a box that cuts what is in it (overflow:
+    /// hidden) has only its part inside the box, as it is drawn; one wholly outside is blank.
+    public func characters(geometry: STPageGeometry, writingMode: STWritingMode, boxes: [STBox] = []) -> [STPlacedCharacter] {
+        characters(mapper: STPageRenderer.Mapper(content: geometry.content, vertical: writingMode == .vertical), boxes: boxes)
+    }
+
+    /// Where the boxes that cut what is in them leave a line seen: their rects' intersection,
+    /// innermost box out; nil where none cuts.
+    func clip(line: Int, mapper: STPageRenderer.Mapper, boxes: [STBox]) -> CGRect? {
+        var current = self.boxes.indices.last { self.boxes[$0].lines.contains(line) }
+        var result: CGRect?
+        while let index = current, self.boxes.indices.contains(index) {
+            let fragment = self.boxes[index]
+            if boxes.indices.contains(fragment.box), boxes[fragment.box].clips {
+                let rect = mapper.rect(inline: fragment.inline, block: fragment.block, inlineSize: fragment.inlineSize, blockSize: fragment.blockSize)
+                result = result.map { $0.intersection(rect) } ?? rect
+            }
+            current = fragment.parent
+        }
+        return result
     }
 
     /// Where a character stands across its line: the line's em box, or, for one smaller than
@@ -48,10 +66,11 @@ extension STPage {
         return (emStart + line.baseline - style.baselineShift - size * ascent, size)
     }
 
-    func characters(mapper: STPageRenderer.Mapper) -> [STPlacedCharacter] {
+    func characters(mapper: STPageRenderer.Mapper, boxes: [STBox] = []) -> [STPlacedCharacter] {
         var result: [STPlacedCharacter] = []
         for (lineIndex, placed) in lines.enumerated() {
             let line = placed.line
+            let cut = boxes.isEmpty ? nil : clip(line: lineIndex, mapper: mapper, boxes: boxes)
             let set = line.block
             let emStart = placed.blockPosition + line.emStart
             for (offset, index) in line.items.enumerated() {
@@ -61,13 +80,20 @@ extension STPage {
                 // raised or lowered (vertical-align: super, a noteref's ※) has its own, where it
                 // is drawn, so that a link's or a selection's mark stands on it.
                 let across = Self.across(item.style, line: line, emStart: emStart, vertical: mapper.vertical)
-                let rect = mapper.rect(
+                var rect = mapper.rect(
                     inline: line.positions[offset] + item.startTrim + item.marginLead, block: across.start,
                     inlineSize: max(line.advances[offset] - item.marginLead - item.marginTrail, 0.5), blockSize: across.size)
+                // Cut as it is drawn: what a box hides is not there to be marked or tapped.
+                var hidden = false
+                if let cut {
+                    let seen = rect.intersection(cut)
+                    hidden = seen.isNull || seen.width < 0.5 || seen.height < 0.5
+                    rect = hidden ? CGRect(origin: rect.origin, size: .zero) : seen
+                }
                 let start = set.block.offset + item.range.lowerBound
                 result.append(STPlacedCharacter(
                     range: start..<(set.block.offset + item.range.upperBound), rect: rect, line: lineIndex,
-                    block: set.index, link: item.style.link, isBlank: item.isLineBreak || item.isSpace))
+                    block: set.index, link: hidden ? nil : item.style.link, isBlank: hidden || item.isLineBreak || item.isSpace))
             }
         }
         for image in images {
@@ -80,7 +106,7 @@ extension STPage {
         var base = lines.count
         for flow in flows {
             let rect = mapper.rect(inline: flow.inline, block: flow.block, inlineSize: flow.inlineSize, blockSize: flow.blockSize)
-            let inner = flow.page.characters(mapper: STPageRenderer.Mapper(content: rect, vertical: flow.vertical))
+            let inner = flow.page.characters(mapper: STPageRenderer.Mapper(content: rect, vertical: flow.vertical), boxes: boxes)
             defer { base += (inner.map(\.line).max() ?? -1) + 1 }
             result += inner.map { character in
                 STPlacedCharacter(range: character.range, rect: character.rect, line: character.line >= 0 ? character.line + base : -1,

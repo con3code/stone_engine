@@ -834,8 +834,9 @@ public enum STPageRenderer {
                 }
                 drawImage(picture, in: rect, context: context)
             case .combined(let shape):
-                // Side by side in one character's space, narrowed to fit it.
-                let centre = mapper.point(inline: at, block: emCentre)
+                // Side by side in one character's space, narrowed to fit it; raised or lowered
+                // with the text about it (a noteref's 10 between parentheses set super).
+                let centre = mapper.point(inline: at, block: emCentre - (mapper.vertical ? style.baselineShift : 0))
                 let squeeze = min(1, style.size * 1.05 / max(shape.advance, 1))
                 let ascentRatio = shape.ascent / max(shape.ascent + shape.descent, 1)
                 context.saveGState()
