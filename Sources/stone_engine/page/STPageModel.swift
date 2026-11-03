@@ -276,6 +276,12 @@ public struct STBlockStyle: Sendable, Hashable {
     /// the page), hyphenated (hyphens: auto, in `language`).
     public var wordBreak: STWordBreak = .normal
     public var lineBreak: STLineBreak? = nil
+    /// Whether a line that may not end before what overflows it is first taken in, its
+    /// punctuation squeezed (追い込み, JLREQ 3.8.2), before the overflow is pushed out to the
+    /// next line (追い出し). False where the book sets line-break on a part of its text, there
+    /// to break lines as CSS does (a browser pushes out only); a line-break set on the whole
+    /// book (電書協's html) leaves it true.
+    public var takesIn = true
     public var breaksLongWords: Bool? = nil
     public var hyphenates = false
     /// Whether the book said whether to hyphenate (hyphens): where it did not, a justified

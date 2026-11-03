@@ -309,13 +309,69 @@ final class STJLREQTests: XCTestCase {
         }
         var japanese = STBlockStyle()
         japanese.language = "ja"
-        XCTAssertGreaterThan(hyphens(japanese), 0, "justified, and in English though the book is Japanese")
+        japanese.alignGiven = true
+        japanese.align = .justify
+        XCTAssertGreaterThan(hyphens(japanese), 0, "justified by the book, and in English though the book is Japanese")
+        var reader = STBlockStyle()
+        reader.language = "ja"
+        XCTAssertEqual(hyphens(reader), 0, "justified by the reader's 行末を揃える only: not hyphenated")
+        var keepAll = japanese
+        keepAll.wordBreak = .keepAll
+        XCTAssertEqual(hyphens(keepAll), 0, "the book says how its words break")
         var none = japanese
         none.hyphensGiven = true
         none.hyphenates = false
         XCTAssertEqual(hyphens(none), 0, "hyphens: none")
         var start = STReaderSettings()
         start.justifies = false
-        XCTAssertEqual(hyphens(japanese, settings: start), 0, "set at the start: not hyphenated")
+        XCTAssertEqual(hyphens(reader, settings: start), 0, "set at the start: not hyphenated")
+    }
+
+    func testCapitalsAreNotHyphenatedUnlessTheBookAsks() {
+        let text = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        func lines(_ style: STBlockStyle) -> STSetBlock? {
+            let block = STBlock(inlines: [.text(text, self.style)], style: style)
+            let section = STSection(blocks: [block], writingMode: .horizontal)
+            let pages = STTypesetter(settings: { var s = STReaderSettings(); s.hangsPunctuation = false; return s }())
+                .paginate(section, geometry: STPageGeometry(size: CGSize(width: size * 10 + 40, height: 800), top: 20, left: 20, bottom: 20, right: 20))
+            return pages[0].lines.first?.line.block
+        }
+        var justified = STBlockStyle()
+        justified.alignGiven = true
+        justified.align = .justify
+        XCTAssertEqual(lines(justified)?.hyphens.count ?? 0, 0, "a run of capitals, hyphens not asked for")
+    }
+
+    func testAMarkAtALinesEndThatDoesNotHangIsKeptInTheLine() {
+        // 、 taken in (追い込み) where 、。 do not hang: the line squeezed to its length, not the
+        // mark set outside it. The reader's hanging on, the book's off.
+        var settings = STReaderSettings()
+        settings.hangsPunctuation = true
+        var block = STBlockStyle()
+        block.hangsEnd = false
+        let text = "ファッション・ショー、ファッション・ショー。"
+        let section = STSection(blocks: [STBlock(inlines: [.text(text, style)], style: block)], writingMode: .horizontal)
+        let page = STTypesetter(settings: settings)
+            .paginate(section, geometry: STPageGeometry(size: CGSize(width: size * 10 + 40, height: 600), top: 20, left: 20, bottom: 20, right: 20))[0]
+        let first = page.lines[0].line
+        XCTAssertEqual((text as NSString).substring(with: NSRange(first.range)), "ファッション・ショー、")
+        let last = first.positions.count - 1
+        XCTAssertLessThanOrEqual(first.positions[last] + first.advances[last], size * 10 + 0.05, "inside the line")
+    }
+
+    func testALineBreakSetOnAPartOfTheTextPushesOutAsCSSDoes() {
+        // line-break set on the part (takesIn off): nothing taken in; loose lets ー start a line,
+        // strict does not.
+        var loose = STBlockStyle()
+        loose.lineBreak = .loose
+        loose.takesIn = false
+        XCTAssertEqual(lines("ファッション・ショー、ファッション・ショー。", em: 10, blockStyle: loose).first, "ファッション・ショ")
+        var strict = loose
+        strict.lineBreak = .strict
+        XCTAssertEqual(lines("ファッション・ショー、ファッション・ショー。", em: 10, blockStyle: strict).first, "ファッション・")
+        // Set on the whole book: taken in, as JLREQ has it.
+        var book = STBlockStyle()
+        book.lineBreak = .strict
+        XCTAssertEqual(lines("ファッション・ショー、ファッション・ショー。", em: 10, blockStyle: book).first, "ファッション・ショー、")
     }
 }

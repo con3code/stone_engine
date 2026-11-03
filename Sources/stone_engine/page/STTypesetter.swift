@@ -882,7 +882,14 @@ public final class STTypesetter {
     /// Whether a block's Latin words are hyphenated at a line's end: as the book says
     /// (hyphens), or, where it says nothing, where its lines are justified.
     func hyphenates(_ style: STBlockStyle) -> Bool {
-        style.hyphensGiven ? style.hyphenates : (style.hyphenates || alignment(of: style) == .justify)
+        style.hyphensGiven ? style.hyphenates : (style.hyphenates || impliesHyphens(style))
+    }
+
+    /// Whether a block hyphenates without the book saying so: where the book justifies it
+    /// (text-align: justify), not where only the reader's 行末を揃える does, nor where the
+    /// book says how its words break (word-break, overflow-wrap).
+    func impliesHyphens(_ style: STBlockStyle) -> Bool {
+        !style.hyphenates && style.alignGiven && style.align == .justify && style.wordBreak == .normal && style.breaksLongWords == nil
     }
 
     /// Opening punctuation (Ps, Pi), which hanging-punctuation: first hangs.
@@ -896,7 +903,10 @@ public final class STTypesetter {
 
     /// Where a Latin word overflowing the line may be hyphenated: the item the line ends
     /// before, the hyphen fitting with what comes before it; nil where it cannot be.
-    private func hyphenation(_ set: STSetBlock, from start: Int, overflowing index: Int, width: CGFloat, available: CGFloat) -> Int? {
+    /// A word of capitals only (an abbreviation, a run of letters) is not broken but where the
+    /// book asks for hyphens (`capitals`).
+    private func hyphenation(_ set: STSetBlock, from start: Int, overflowing index: Int, width: CGFloat, available: CGFloat,
+                             capitals: Bool) -> Int? {
         let items = set.items
         guard items[index].characterClass.wordLetter else { return nil }
         var first = index, last = index
@@ -906,7 +916,9 @@ public final class STTypesetter {
         let word = set.block.text as NSString
         let lower = items[first].range.lowerBound, upper = items[last].range.upperBound
         guard upper <= word.length else { return nil }
-        let text = word.substring(with: NSRange(location: lower, length: upper - lower)) as CFString
+        let string = word.substring(with: NSRange(location: lower, length: upper - lower))
+        if !capitals, !string.contains(where: \.isLowercase) { return nil }
+        let text = string as CFString
         // In the block's language; a Latin word in Chinese, Japanese or Korean text (which have
         // no hyphenation of their own), in English.
         var locale = CFLocaleCreate(nil, CFLocaleIdentifier(rawValue: (set.block.style.language ?? "en") as CFString))
@@ -988,7 +1000,7 @@ public final class STTypesetter {
                     // 追い込み before 追い出し (JLREQ 3.8.2): where the line may not end before this
                     // item (禁則, 分離禁止), it and what may not be parted from it are taken in where
                     // squeezing the line's punctuation and spaces makes room for them.
-                    if !canBreak(before: index, in: items, style: spacing), settings.squeezesPunctuation,
+                    if !canBreak(before: index, in: items, style: spacing), settings.squeezesPunctuation, spacing.takesIn,
                        let taken = pushedIn(set, from: start, overflowing: index, width: width, available: available, style: spacing,
                                             startTrimmed: trimsStart) {
                         end = taken
@@ -997,7 +1009,9 @@ public final class STTypesetter {
                     var breakAt = index
                     while breakAt > start + 1, !canBreak(before: breakAt, in: items, style: spacing) { breakAt -= 1 }
                     // Hyphenated where the word allows it (hyphens: auto).
-                    if hyphenates(spacing), let hyphen = hyphenation(set, from: start, overflowing: index, width: width, available: available),
+                    if hyphenates(spacing),
+                       let hyphen = hyphenation(set, from: start, overflowing: index, width: width, available: available,
+                                                capitals: !impliesHyphens(spacing)),
                        hyphen > breakAt || !canBreak(before: breakAt, in: items, style: spacing) {
                         set.hyphens.insert(hyphen)
                         end = hyphen
@@ -1207,7 +1221,9 @@ public final class STTypesetter {
         var used = advances.reduce(0, +)
         for index in trailing..<items.count { used -= advances[index] }
         var hanging: CGFloat = 0
-        if trailing > 0, items[trailing - 1].characterClass.hangs, used > measure + 0.01 {
+        // Only where 、。 hang (hanging-punctuation); elsewhere one at the end was taken in
+        // (追い込み) or kept trimmed, and the line is squeezed to hold it.
+        if trailing > 0, style.hangsEnd ?? settings.hangsPunctuation, items[trailing - 1].characterClass.hangs, used > measure + 0.01 {
             hanging = advances[trailing - 1]
         }
         var content = used - hanging
