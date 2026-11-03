@@ -374,4 +374,22 @@ final class STJLREQTests: XCTestCase {
         book.lineBreak = .strict
         XCTAssertEqual(lines("ファッション・ショー、ファッション・ショー。", em: 10, blockStyle: book).first, "ファッション・ショー、")
     }
+
+    func testARaisedCharactersMarkStandsWhereItIsDrawn() {
+        // 「本文※本」 down a vertical line, ※ smaller and raised (vertical-align: super): its
+        // rect is its own em box, toward the right, not the line's.
+        var small = style
+        small.size = size * 0.6
+        small.baselineShift = size * 0.3
+        let section = STSection(blocks: [STBlock(inlines: [.text("本文", style), .text("※", small), .text("本", style)], style: STBlockStyle())],
+                                writingMode: .vertical)
+        let geometry = STPageGeometry(size: CGSize(width: 300, height: 300), top: 20, left: 20, bottom: 20, right: 20)
+        let page = STTypesetter(settings: STReaderSettings()).paginate(section, geometry: geometry)[0]
+        let characters = page.characters(geometry: geometry, writingMode: .vertical)
+        let body = characters[0].rect, mark = characters[2].rect
+        XCTAssertEqual(body.width, size, accuracy: 0.01)
+        XCTAssertEqual(mark.width, size * 0.6, accuracy: 0.01)
+        XCTAssertEqual(mark.midX - body.midX, size * 0.3, accuracy: 0.01, "raised: toward the right")
+    }
 }
+

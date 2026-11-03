@@ -965,9 +965,12 @@ public enum STPageRenderer {
         let emCentre = emStart + line.emSize / 2
         let overEdge: CGFloat, underEdge: CGFloat, baseline: CGFloat
         if mapper.vertical {
-            overEdge = emCentre - size / 2
-            underEdge = emCentre + size / 2
-            baseline = emCentre
+            // Raised or lowered (vertical-align), toward the right or the left, as the glyph is
+            // drawn: a 傍線 under a raised ※ stands to its right, not through it.
+            let centre = emCentre - style.baselineShift
+            overEdge = centre - size / 2
+            underEdge = centre + size / 2
+            baseline = centre
         } else {
             baseline = emStart + line.baseline - style.baselineShift
             overEdge = baseline - size * 0.88

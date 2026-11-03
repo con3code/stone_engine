@@ -37,6 +37,17 @@ extension STPage {
         characters(mapper: STPageRenderer.Mapper(content: geometry.content, vertical: writingMode == .vertical))
     }
 
+    /// Where a character stands across its line: the line's em box, or, for one smaller than
+    /// the line's or shifted off its baseline, its own em box where the renderer draws it
+    /// (centred and shifted toward the right in vertical lines, on the baseline in horizontal).
+    static func across(_ style: STTextStyle, line: STLine, emStart: CGFloat, vertical: Bool) -> (start: CGFloat, size: CGFloat) {
+        guard style.baselineShift != 0 || style.size < line.emSize - 0.01 else { return (emStart, line.emSize) }
+        let size = min(style.size, line.emSize)
+        if vertical { return (emStart + line.emSize / 2 - style.baselineShift - size / 2, size) }
+        let ascent = line.emSize > 0 ? line.baseline / line.emSize : 0.88
+        return (emStart + line.baseline - style.baselineShift - size * ascent, size)
+    }
+
     func characters(mapper: STPageRenderer.Mapper) -> [STPlacedCharacter] {
         var result: [STPlacedCharacter] = []
         for (lineIndex, placed) in lines.enumerated() {
@@ -46,9 +57,13 @@ extension STPage {
             for (offset, index) in line.items.enumerated() {
                 let item = set.items[index]
                 // Inside the inline boxes' margins about it (taken along the line, not its own).
+                // Across the line, the line's em box; a character smaller than the line's or
+                // raised or lowered (vertical-align: super, a noteref's ※) has its own, where it
+                // is drawn, so that a link's or a selection's mark stands on it.
+                let across = Self.across(item.style, line: line, emStart: emStart, vertical: mapper.vertical)
                 let rect = mapper.rect(
-                    inline: line.positions[offset] + item.startTrim + item.marginLead, block: emStart,
-                    inlineSize: max(line.advances[offset] - item.marginLead - item.marginTrail, 0.5), blockSize: line.emSize)
+                    inline: line.positions[offset] + item.startTrim + item.marginLead, block: across.start,
+                    inlineSize: max(line.advances[offset] - item.marginLead - item.marginTrail, 0.5), blockSize: across.size)
                 let start = set.block.offset + item.range.lowerBound
                 result.append(STPlacedCharacter(
                     range: start..<(set.block.offset + item.range.upperBound), rect: rect, line: lineIndex,
