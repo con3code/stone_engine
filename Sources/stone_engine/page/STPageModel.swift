@@ -241,6 +241,10 @@ public struct STBlockStyle: Sendable, Hashable {
     /// Whether the book gave the line height (CSS line-height other than normal), rather
     /// than the reader's standard standing for it.
     public var lineHeightGiven = false
+    /// A paragraph of the book's body text (its own size, not a heading, a table's or a
+    /// smaller note's): a line height the book sets close (洋書の本文 at 1.3) is still raised
+    /// to the reader's 行間, as those set close on purpose (a 年表's) are not.
+    public var isBodyText = false
     /// Not left at a page's end without what follows it (a table's caption), as a heading is not.
     public var keepsWithNext = false
     /// Set below the floats at the lines' start, at their end (CSS clear).
@@ -497,7 +501,7 @@ public struct STReaderSettings: Sendable, Hashable {
     /// The line height a block is set to, as a multiple of its font size.
     public func lineHeight(of style: STBlockStyle) -> CGFloat {
         if followsBookLineHeights { return style.lineHeightGiven ? style.lineHeight : normalLineHeight }
-        if style.lineHeightGiven, style.lineHeight < tightLineHeight { return style.lineHeight }
+        if style.lineHeightGiven, style.lineHeight < tightLineHeight, !style.isBodyText || style.lineHeight < 1 { return style.lineHeight }
         return max(style.lineHeight, minimumLineHeight)
     }
     /// The punctuation squeezed as in Japanese typesetting (約物の詰め) ("stone" mode).

@@ -1362,7 +1362,10 @@ public final class STTypesetter {
         tail.items = Array(set.items[start...])
         tail.rubies = set.rubies
         guard let first = breakLines(tail, firstMeasure: measure, measure: measure).first else { return start..<set.items.count }
-        return (start + first.lowerBound)..<(start + max(first.upperBound, first.lowerBound + 1))
+        let range = (start + first.lowerBound)..<(start + max(first.upperBound, first.lowerBound + 1))
+        // A word hyphenated at this line's end: its hyphen drawn (the tail's places are the block's less `start`).
+        if tail.hyphens.contains(first.upperBound) { set.hyphens.insert(range.upperBound) }
+        return range
     }
 
     /// A block's items with its first line in its ::first-line style: the block broken in
@@ -1421,8 +1424,8 @@ public final class STTypesetter {
         // 4.5.1: the line pitch kept where ruby is): the line is made larger only where the
         // whole of the leading does not hold them.
         let leading = max(0, extent - emSize)
-        over = max(over, overMarks - leading / 2)
-        under = max(under, underMarks - leading / 2)
+        if overMarks > 0 { over = max(over, overMarks - leading / 2) }
+        if underMarks > 0 { under = max(under, underMarks - leading / 2) }
         // Images larger than the em box: across, one stands on the em box's foot and pushes the
         // line out on the over side; down, one is centred on the line and pushes it out on both.
         for item in items where item.across > emSize {
@@ -1433,7 +1436,8 @@ public final class STTypesetter {
                 over = max(over, (extent - emSize) / 2 + item.across - emSize)
             }
         }
-        under = max(under, 0)
+        // A line height under 1 (a drop cap's 0.7) makes the line lower than its em box, on
+        // both sides alike, as CSS sets it.
         extent = over + emSize + under
         let shape = items.first(where: { $0.shape != nil })?.shape
         let ascentRatio = shape.map { $0.ascent / max($0.ascent + $0.descent, 1) } ?? 0.88
@@ -2190,8 +2194,11 @@ public final class STTypesetter {
                         newPage()
                     }
                 }
-                // Not begun where its border and padding and its first line do not fit: no
-                // part of a box with nothing in it at a page's or column's end.
+                // Not begun where its border and padding and its first lines do not fit: no
+                // part of a box with nothing in it at a page's or column's end. The first
+                // lines are as many as a paragraph may not be left with at a page's end
+                // (orphans), which goes whole to the next page where they do not fit; one
+                // for a heading, and for a paragraph short enough to be one line.
                 if !page.isEmpty, !box.fixedBlockSize {
                     var room = box.paddingBefore
                     scan: for block in section.blocks[(index + 1)...] {
@@ -2199,8 +2206,15 @@ public final class STTypesetter {
                         case .boxStart(let inner):
                             room += max(0, section.boxes[inner].marginBefore) + section.boxes[inner].paddingBefore
                         case .paragraph, .heading:
+                            var lines = 1
+                            if case .paragraph = block.kind, block.style.orphans > 1 {
+                                let text = block.text
+                                let short = !text.contains("\n")
+                                    && CGFloat(text.count) * block.baseStyle.size <= box.inlineSize - 2 * block.baseStyle.size
+                                if !short { lines = block.style.orphans }
+                            }
                             room += max(0, block.style.marginBefore)
-                                + block.baseStyle.size * settings.lineHeight(of: block.style)
+                                + CGFloat(lines) * block.baseStyle.size * settings.lineHeight(of: block.style)
                             break scan
                         default:
                             break scan
