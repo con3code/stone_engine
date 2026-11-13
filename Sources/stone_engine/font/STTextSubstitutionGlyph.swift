@@ -77,7 +77,7 @@ class STTextSubstitutionGlyph {
         print("\(Character(UnicodeScalar(value >> 24)!))\(Character(UnicodeScalar((value & 0x00FF0000) >> 16)!))\(Character(UnicodeScalar((value & 0x0000FF00) >> 8)!))\(Character(UnicodeScalar(value & 0x000000FF)!))")
     }
 
-    private static func substituteGlyphIdWithLookupSubtable(lookupType: Int, subTablePtr: UnsafePointer<UInt8>, glyph: CGGlyph) -> CGGlyph {
+    static func substituteGlyphIdWithLookupSubtable(lookupType: Int, subTablePtr: UnsafePointer<UInt8>, glyph: CGGlyph) -> CGGlyph {
         // Set sub table pointer
         var tmp6 = subTablePtr
 
@@ -161,9 +161,13 @@ class STTextSubstitutionGlyph {
                 case 1:
                     // Read delta glyph ID
                     let deltaGlyphId = tmp6.readBigEndianUInt16()
-                    tmp6 = tmp6.advanced(by: 2)
 
-                    print("Not implemented yet, subst format 1")
+                    // Check with coverage index
+                    if coverageIndex == -1 { return 0 }
+
+                    // The substitute is the glyph ID plus the delta, modulo 65536
+                    // (the delta is signed, so the addition wraps)
+                    return glyph &+ deltaGlyphId
 
                     // Subst format 2
                 case 2:
