@@ -310,7 +310,7 @@ class STTextSubstitutionGlyph {
 
             // Read Script table
             let scriptTablePtr = scriptListTablePtr.advanced(by: Int(scriptRecordOffset))
-            var tmp2 = scriptTablePtr
+            let tmp2 = scriptTablePtr
             let defaultLangSysOffset = tmp2.readBigEndianUInt16()
 
             if defaultLangSysOffset != 0 {

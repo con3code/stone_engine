@@ -758,9 +758,8 @@ class STLayout {
             }
         }
         
-        // Calc gap and diff
+        // Calc gap
         let gap = (context.renderSize.height - total) / CGFloat(tokenCount)
-        let diff = context.renderSize.height - total
         
         
         // Switch by text align

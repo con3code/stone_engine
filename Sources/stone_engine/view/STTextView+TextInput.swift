@@ -68,6 +68,9 @@ public extension STTextView {
         
         // Keep current selected range
         let oldSelectedRange = selectedSTTextRange
+
+        // For the undo registration below, while it is commented out
+        _ = (replacedText, insertedRange, oldSelectedRange)
         
         // For changed
         if self.text != text {

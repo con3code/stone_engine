@@ -14,9 +14,9 @@ public extension STTextView {
     // MARK: - UIResponder
     //--------------------------------------------------------------//
     
-    public override var canBecomeFirstResponder: Bool { true }
+    override var canBecomeFirstResponder: Bool { true }
 
-    public override func becomeFirstResponder() -> Bool {
+    override func becomeFirstResponder() -> Bool {
         // Invoke super
         let result = super.becomeFirstResponder()
         
@@ -29,7 +29,7 @@ public extension STTextView {
         return result
     }
     
-    public override func resignFirstResponder() -> Bool {
+    override func resignFirstResponder() -> Bool {
         // Invoke super
         let result = super.resignFirstResponder()
         
