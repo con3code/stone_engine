@@ -1266,7 +1266,9 @@ public final class STTypesetter {
         }
         var positions: [CGFloat] = []
         var position = offset
-        var markerPosition = style.markerEdge - markerWidth
+        // As far before the line's start as its edge is before the block's: where the line
+        // is set (a table's cell, beside a float), not where the block would stand in the page.
+        var markerPosition = inlineStart - (style.marginStart - style.markerEdge) - markerWidth
         for i in items.indices {
             if i < markerCount {
                 positions.append(markerPosition - starts[i] - items[i].startTrim)
@@ -1645,13 +1647,56 @@ public final class STTypesetter {
 
         /// Blocks a table set already (its cells'), passed over.
         var skipUntil = 0
-        /// Floats beside which lines are shortened: at the lines' end or not, how much of
-        /// the line they take, and where across they end.
-        var floats: [(atEnd: Bool, length: CGFloat, end: CGFloat)] = []
+        /// Floats beside which lines are shortened: at the lines' end or not, how far from
+        /// that edge of the lines they begin and how much of the line they take, and where
+        /// across they end.
+        var floats: [(atEnd: Bool, from: CGFloat, length: CGFloat, end: CGFloat)] = []
+        /// How far in from an edge of the lines the floats there reach, of those still beside
+        /// what is at `at` across. (Not the sum of their lengths: one before the others may
+        /// have ended, the others standing where they stood.)
+        func floatReach(atEnd: Bool, at: CGFloat) -> CGFloat {
+            floats.filter { $0.atEnd == atEnd && $0.end > at }.map { $0.from + $0.length }.max() ?? 0
+        }
+        /// Where a float of `length` stands at `at` across, from its edge of lines `room`
+        /// long: as near the edge as the floats still there leave room for it (at the edge
+        /// itself where the one that stood there has ended), clear of those of the other
+        /// edge; nil where there is no room.
+        func floatPlace(atEnd: Bool, length: CGFloat, at: CGFloat, room: CGFloat) -> CGFloat? {
+            let beside = floats.filter { $0.atEnd == atEnd && $0.end > at }
+            let limit = room - floatReach(atEnd: !atEnd, at: at)
+            for from in ([0] + beside.map { $0.from + $0.length }).sorted() where from + length <= limit + 0.5 {
+                if !beside.contains(where: { from < $0.from + $0.length - 0.5 && from + length > $0.from + 0.5 }) { return from }
+            }
+            return nil
+        }
 
         /// A table: its columns' lengths from what they are given and what their cells hold,
         /// its rows one after another (a page breaks between them), each cell's blocks set in
         /// its column, the cells' boxes drawn about them.
+        /// What a table's text is made smaller by, where its columns do not fit the page at
+        /// the least each needs (a table of many columns of numbers): `cellBlock`.
+        var tableScale: CGFloat = 1
+        /// A block of a table's cell, its text made smaller by `tableScale`.
+        func cellBlock(_ index: Int) -> STBlock {
+            let block = section.blocks[index]
+            guard tableScale != 1 else { return block }
+            var made = block
+            let smaller = STFirstLine(scale: tableScale)
+            made.inlines = block.inlines.map(smaller.apply)
+            made.baseStyle.size *= tableScale
+            made.style.textIndent *= tableScale
+            return made
+        }
+        /// A cell's box, its padding (and the borders in it) made smaller with its text.
+        func cellBox(_ index: Int) -> STBox {
+            var box = section.boxes[index]
+            guard tableScale != 1 else { return box }
+            box.paddingStart *= tableScale
+            box.paddingEnd *= tableScale
+            box.paddingBefore *= tableScale
+            box.paddingAfter *= tableScale
+            return box
+        }
         func setTable(_ table: STTable, block: STBlock) {
             let style = block.style
             let available = max(1, inlineExtent - style.marginStart - style.marginEnd)
@@ -1670,10 +1715,10 @@ public final class STTypesetter {
             }
             // What each cell needs at least (its longest word) and at most (all on one line).
             func contentLengths(_ cell: STTable.Cell) -> (CGFloat, CGFloat) {
-                let box = section.boxes[cell.box]
+                let box = cellBox(cell.box)
                 var least: CGFloat = 0, most: CGFloat = 0
                 for blockIndex in cell.blocks {
-                    let inner = section.blocks[blockIndex]
+                    let inner = cellBlock(blockIndex)
                     // A picture on its own: as long as it is across, at most; one that may be
                     // made smaller (fit: a percentage max-width or the like) needs nothing at least.
                     if case .image(_, let natural, let fit) = inner.kind {
@@ -1691,9 +1736,24 @@ public final class STTypesetter {
                     for range in breakLines(set, firstMeasure: .greatestFiniteMagnitude, measure: .greatestFiniteMagnitude) {
                         most = max(most, set.items[range].reduce(0) { $0 + $1.squeezedAdvance } + margins + max(0, inner.style.textIndent))
                     }
-                    for range in breakLines(set, firstMeasure: 0.5, measure: 0.5) {
-                        least = max(least, set.items[range].filter { !$0.isSpace }.reduce(0) { $0 + $1.squeezedAdvance } + margins)
+                    // At least as long as the longest of what a line may not be broken in (a
+                    // number, a word, a character and the mark that follows it): broken
+                    // wherever a line of no length is, a column of numbers was left a digit or
+                    // two a line. A word of many characters (an address) asks for no more
+                    // than ten.
+                    currentSet = set
+                    var run: CGFloat = 0
+                    for index in set.items.indices {
+                        let item = set.items[index]
+                        if item.isLineBreak || (index > 0 && canBreak(before: index, in: set.items, style: inner.style)) {
+                            least = max(least, min(run, inner.baseStyle.size * 10) + margins)
+                            run = 0
+                        }
+                        if item.isLineBreak || (item.isSpace && run == 0) { continue }
+                        run += item.squeezedAdvance
                     }
+                    least = max(least, min(run, inner.baseStyle.size * 10) + margins)
+                    currentSet = nil
                 }
                 return (least + box.paddingStart + box.paddingEnd, most + box.paddingStart + box.paddingEnd)
             }
@@ -1717,6 +1777,32 @@ public final class STTypesetter {
                     }
                 }
             }
+            // A cell across several columns: what it needs more than they have together goes
+            // to them, those given no length first, by what they hold (evenly where they hold
+            // nothing: columns that only such cells stand in had no length at all, and what
+            // was in them was set a character a line).
+            for (r, row) in table.rows.enumerated() {
+                for (i, cell) in row.enumerated() where places[r][i].columns.count > 1 {
+                    let spanned = Array(places[r][i].columns).filter { $0 < columns }
+                    guard spanned.count > 1 else { continue }
+                    let (low, high) = contentLengths(cell)
+                    let between = spacing * CGFloat(spanned.count - 1)
+                    func widen(_ lengths: inout [CGFloat], to needed: CGFloat, by weights: [CGFloat]) {
+                        let short = needed - between - spanned.reduce(CGFloat(0)) { $0 + lengths[$1] }
+                        guard short > 0.01 else { return }
+                        let free = spanned.filter { given[$0] == nil }
+                        let receivers = free.isEmpty ? spanned : free
+                        let weight = receivers.reduce(CGFloat(0)) { $0 + weights[$1] }
+                        for column in receivers {
+                            lengths[column] += weight > 0.01 ? short * weights[column] / weight : short / CGFloat(receivers.count)
+                        }
+                    }
+                    widen(&least, to: low, by: most)
+                    for column in spanned { most[column] = max(most[column], least[column]) }
+                    let weights = most
+                    widen(&most, to: high, by: weights)
+                }
+            }
             let gaps = spacing * CGFloat(columns + 1) + tablePadding
             let wanted = (0..<columns).reduce(CGFloat(0)) { $0 + max(given[$1] ?? most[$1], least[$1]) }
             // No longer than its max-width, whether it takes its length from its content or is given one.
@@ -1727,6 +1813,20 @@ public final class STTypesetter {
             default: break
             }
             if let given = tableLength { tableLength = min(given, room) }
+            // Its columns longer together, at the least each needs, than the room: its text
+            // smaller (to half at the smallest), and its cells' padding with it, as a table of many columns is printed.
+            // Left its size, the numbers of such a table were broken a digit or two a line,
+            // and ran over one another.
+            let leastTogether = least.reduce(0, +)
+            if tableScale == 1, columns > 3, leastTogether + gaps > (tableLength ?? room) + 0.5 {
+                let factor = max(0.5, ((tableLength ?? room) - gaps) / max(1, leastTogether) * 0.98)
+                if factor < 0.97 {
+                    tableScale = factor
+                    setTable(table, block: block)
+                    tableScale = 1
+                    return
+                }
+            }
             let whole = max(1, (tableLength ?? min(room, wanted + gaps)) - gaps)
             var lengths = (0..<columns).map { max(given[$0] ?? most[$0], least[$0]) }
             let total = lengths.reduce(0, +)
@@ -1738,11 +1838,35 @@ public final class STTypesetter {
                 for column in receivers { lengths[column] += (whole - total) * max(lengths[column], 1) / weight }
             } else if total > whole {
                 // Narrowed towards their least, the columns given no length first.
-                var excess = total - whole
+                // No room for the lengths the columns are given (written for a window wider
+                // than the page): a column given more than what it holds needs on one line
+                // gives that up first. Kept, columns of numbers stood wide and the column of
+                // what the numbers are of was left a character a line.
+                for column in 0..<columns where given[column] != nil {
+                    lengths[column] = max(least[column], min(lengths[column], most[column]))
+                    given[column] = nil
+                }
+                var excess = lengths.reduce(0, +) - whole
+                // The longest of the columns given no length made no longer than one length
+                // (the one at which the table fits), none shorter than its least: a column
+                // of a few characters (a year, a number) keeps them on one line beside
+                // columns of sentences, which are broken into lines anyway. Narrowed by what
+                // each could give, it was broken a character a line.
+                let free = (0..<columns).filter { given[$0] == nil }
+                let target = free.reduce(CGFloat(0)) { $0 + lengths[$1] } - excess
+                if free.count > 1, target >= free.reduce(CGFloat(0), { $0 + least[$1] }) {
+                    var low: CGFloat = 0, high = free.map { lengths[$0] }.max() ?? 0
+                    for _ in 0..<40 {
+                        let cap = (low + high) / 2
+                        if free.reduce(CGFloat(0), { $0 + max(least[$1], min(lengths[$1], cap)) }) > target { high = cap } else { low = cap }
+                    }
+                    for column in free { lengths[column] = max(least[column], min(lengths[column], low)) }
+                    excess = lengths.reduce(0, +) - whole
+                }
                 for pass in 0..<2 {
                     let candidates = (0..<columns).filter { pass == 1 || given[$0] == nil }
                     let room = candidates.reduce(CGFloat(0)) { $0 + max(0, lengths[$1] - least[$1]) }
-                    guard room > 0, excess > 0 else { continue }
+                    guard room > 0, excess > 0.01 else { continue }
                     let take = min(excess, room)
                     for column in candidates { lengths[column] -= take * max(0, lengths[column] - least[column]) / room }
                     excess -= take
@@ -1750,6 +1874,53 @@ public final class STTypesetter {
                 if excess > 0.5 {
                     let sum = lengths.reduce(0, +)
                     lengths = lengths.map { $0 * whole / max(sum, 1) }
+                }
+            }
+            // No room for its columns side by side: a column of sentences left less than a
+            // dozen characters a line, its longest paragraph more than three lines (a table of
+            // years and what happened in them, on a phone). Its cells then one under another,
+            // each as long as the room, in the order they are read; in a window the table
+            // would be scrolled sideways, which a page cannot be.
+            // Only a table of two or three columns: one of many (numbers under their
+            // headings) read one cell under another tells nothing.
+            if columns > 1, columns <= 3, total > whole,
+               (0..<columns).contains(where: { lengths[$0] < min(most[$0], block.baseStyle.size * 12) && lengths[$0] * 3 < most[$0] }) {
+                var stacked = table
+                stacked.length = .percent(100)
+                stacked.rows = table.rows.flatMap { row in
+                    row.compactMap { cell -> [STTable.Cell]? in
+                        guard cell.blocks.contains(where: {
+                            switch section.blocks[$0].kind {
+                            case .paragraph, .heading, .image: return true
+                            default: return false
+                            }
+                        }) else { return nil }
+                        var alone = cell
+                        alone.span = 1
+                        alone.rowSpan = 1
+                        alone.length = .auto
+                        return [alone]
+                    }
+                }
+                if !stacked.rows.isEmpty {
+                    setTable(stacked, block: block)
+                    return
+                }
+            }
+            // A table of more columns, one of them left as little (the column of what the
+            // numbers are of, beside columns of numbers under headings that are not broken):
+            // its text smaller, so far that the column has room for ten characters or so.
+            if columns > 3, tableScale == 1, total > whole {
+                let starved = (0..<columns).filter { lengths[$0] < min(most[$0], block.baseStyle.size * 12) && lengths[$0] * 3 < most[$0] }
+                if !starved.isEmpty {
+                    let others = (0..<columns).filter { !starved.contains($0) }.reduce(CGFloat(0)) { $0 + lengths[$1] }
+                    let factor = max(0.5, whole / max(1, others + CGFloat(starved.count) * block.baseStyle.size * 10))
+                    if factor < 0.97 {
+                        tableScale = factor
+                        setTable(table, block: block)
+                        tableScale = 1
+                        return
+                    }
                 }
             }
             let tableInline = lengths.reduce(0, +) + gaps
@@ -1781,7 +1952,7 @@ public final class STTypesetter {
                 let length = lengths[start..<(start + span)].reduce(0, +) + spacing * CGFloat(span - 1)
                 let inline = tableStart + (tableBox?.paddingStart ?? 0) + spacing
                     + lengths[0..<start].reduce(0, +) + spacing * CGFloat(start)
-                let box = section.boxes[cell.box]
+                let box = cellBox(cell.box)
                 // A right-to-left table's first column on the right.
                 let cellInline = table.rightToLeft ? tableStart * 2 + tableInline - inline - length : inline
                 let contentStart = cellInline + box.paddingStart
@@ -1791,16 +1962,74 @@ public final class STTypesetter {
                 var pictures: [STPlacedImage] = []
                 var height: CGFloat = 0
                 var previousAfter: CGFloat = 0
+                // Blocks floated in the cell (a month floated before what happened in it, in
+                // a table of years): each as long as its text, at the cell's start or end
+                // below those before it, the lines after it beside it.
+                var floated: [(atEnd: Bool, length: CGFloat, end: CGFloat)] = []
+                var floatedUntil = 0
+                var flowed = false
                 for blockIndex in cell.blocks {
-                    let inner = section.blocks[blockIndex]
+                    if blockIndex < floatedUntil { continue }
+                    let inner = cellBlock(blockIndex)
                     switch inner.kind {
+                    case .flow(let flow):
+                        guard let atEnd = flow.floatsAtEnd, flow.vertical == vertical else { continue }
+                        let held = ((blockIndex + 1)..<min(flow.end, cell.blocks.upperBound)).filter {
+                            switch section.blocks[$0].kind {
+                            case .paragraph, .heading: return true
+                            default: return false
+                            }
+                        }
+                        let sets = held.map { setBlock(cellBlock($0), index: $0, vertical: vertical) }
+                        guard !sets.isEmpty else { continue }
+                        var natural: CGFloat = 0
+                        for set in sets {
+                            for range in breakLines(set, firstMeasure: .greatestFiniteMagnitude, measure: .greatestFiniteMagnitude) {
+                                natural = max(natural, set.items[range].reduce(0) { $0 + $1.squeezedAdvance } + max(0, set.block.style.textIndent))
+                            }
+                        }
+                        let around = flow.insets.along + flow.margins.along
+                        let length = max(1, min(flow.lineLength ?? (natural + 1), measure - around))
+                        var at = max(height, floated.map(\.end).max() ?? 0) + flow.margins.before + flow.insets.before
+                        let start = atEnd
+                            ? contentStart + measure - flow.margins.end - flow.insets.end - length
+                            : contentStart + flow.margins.start + flow.insets.start
+                        for set in sets {
+                            for line in lines(of: set, measure: length, inlineStart: start) {
+                                placed.append((line, at))
+                                at += line.extent
+                            }
+                        }
+                        floated.append((atEnd, length + around, at + flow.insets.after + flow.margins.after))
+                        floatedUntil = flow.end
+                        flowed = true
                     case .paragraph, .heading:
-                        height += placed.isEmpty ? 0 : max(previousAfter, inner.style.marginBefore)
+                        height += placed.isEmpty || (flowed && height == 0) ? 0 : max(previousAfter, inner.style.marginBefore)
                         let set = setBlock(inner, index: blockIndex, vertical: vertical)
                         let innerMeasure = max(inner.baseStyle.size, measure - inner.style.marginStart - inner.style.marginEnd)
-                        for line in lines(of: set, measure: innerMeasure, inlineStart: contentStart + inner.style.marginStart) {
-                            placed.append((line, height))
-                            height += line.extent
+                        // No room for a few characters beside the floats: below them.
+                        while let next = floated.filter({ $0.end > height }).map(\.end).min(),
+                              measure - floated.filter({ $0.end > height }).map(\.length).reduce(0, +) < inner.baseStyle.size * 4 {
+                            height = next
+                        }
+                        if floated.contains(where: { $0.end > height }) {
+                            // Beside them: from the float's edge or its own margin's, whichever is further in.
+                            let top = height
+                            let beside = lines(of: set) { across in
+                                let startTaken = floated.filter { !$0.atEnd && $0.end > top + across }.map(\.length).reduce(0, +)
+                                let endTaken = floated.filter { $0.atEnd && $0.end > top + across }.map(\.length).reduce(0, +)
+                                let before = max(inner.style.marginStart, startTaken), after = max(inner.style.marginEnd, endTaken)
+                                return (contentStart + before, max(inner.baseStyle.size, measure - before - after))
+                            }
+                            for line in beside {
+                                placed.append((line, height))
+                                height += line.extent
+                            }
+                        } else {
+                            for line in lines(of: set, measure: innerMeasure, inlineStart: contentStart + inner.style.marginStart) {
+                                placed.append((line, height))
+                                height += line.extent
+                            }
                         }
                         previousAfter = inner.style.marginAfter
                     case .image(let id, let natural, _):
@@ -1828,13 +2057,14 @@ public final class STTypesetter {
                         continue
                     }
                 }
+                height = max(height, floated.map(\.end).max() ?? 0)
                 return (cell, rows, cellInline, length, placed, pictures, height)
             }
             let setRows: [[SetCell]] = table.rows.enumerated().map { r, row in
                 row.enumerated().map { i, cell in setCell(cell, taking: places[r][i].columns, rows: places[r][i].rows) }
             }
             func outer(_ cell: SetCell) -> CGFloat {
-                cell.height + section.boxes[cell.cell.box].paddingBefore + section.boxes[cell.cell.box].paddingAfter
+                cell.height + cellBox(cell.cell.box).paddingBefore + cellBox(cell.cell.box).paddingAfter
             }
             // Each row as high as its highest cell of one row; a cell going down several rows
             // (rowspan) higher than they are together makes the last of them higher.
@@ -1847,6 +2077,196 @@ public final class STTypesetter {
                 if short > 0, let last = cell.rows.last { rowHeights[last] += short }
             }
             var rowsPlaced = 0
+            /// What a cell holds, in the order it goes down the cell: a line or a picture, and
+            /// where it starts in the cell.
+            enum Piece {
+                case line(STLine, CGFloat)
+                case picture(STPlacedImage)
+                var start: CGFloat {
+                    switch self {
+                    case .line(_, let at): at
+                    case .picture(let picture): picture.block
+                    }
+                }
+                var extent: CGFloat {
+                    switch self {
+                    case .line(let line, _): line.extent
+                    case .picture(let picture): picture.blockSize
+                    }
+                }
+            }
+            func placeLongRow(_ cells: [SetCell]) {
+                var left: [ArraySlice<Piece>] = cells.map { cell in
+                    (cell.lines.map { Piece.line($0.0, $0.1) } + cell.images.map { Piece.picture($0) })
+                        .sorted { $0.start < $1.start }[...]
+                }
+                var first = true
+                while true {
+                    // Room for each cell's next piece, or a new page.
+                    let need = zip(cells, left).map { cell, pieces in
+                        cellBox(cell.cell.box).paddingBefore + (pieces.first?.extent ?? 0)
+                    }.max() ?? 0
+                    if position + need > blockExtent + 0.01, !page.isEmpty {
+                        closeTableBox(ends: false)
+                        newPage()
+                        openTableBox()
+                        if let placed = tablePlaced { page.boxes[placed].startsHere = false }
+                    }
+                    let rowStart = position
+                    let room = blockExtent - rowStart
+                    var used: CGFloat = 0
+                    var pieceBoxes: [Int] = []
+                    for (index, cell) in cells.enumerated() {
+                        let box = cellBox(cell.cell.box)
+                        let base = left[index].first?.start ?? 0
+                        let firstLine = page.lines.count, firstImage = page.images.count
+                        page.boxes.append(STPlacedBox(
+                            box: cell.cell.box, inline: cell.inline, block: rowStart, inlineSize: cell.length, blockSize: 0,
+                            startsHere: first, endsHere: true, parent: tablePlaced ?? open.last?.placed,
+                            lines: firstLine..<firstLine, images: firstImage..<firstImage))
+                        let placedBox = page.boxes.count - 1
+                        pieceBoxes.append(placedBox)
+                        var reach = box.paddingBefore
+                        var taken = 0
+                        while let piece = left[index].first {
+                            let at = box.paddingBefore + piece.start - base
+                            // The first piece on a page goes on it whatever its size: nothing is left out.
+                            if at + piece.extent > room + 0.01, taken > 0 { break }
+                            switch piece {
+                            case .line(let line, _):
+                                page.lines.append(STPlacedLine(line: line, blockPosition: rowStart + at))
+                                page.extend(line.range)
+                            case .picture(let picture):
+                                page.images.append(STPlacedImage(
+                                    id: picture.id, blendMode: picture.blendMode, fit: picture.fit, fitPosition: picture.fitPosition,
+                                    textOffset: picture.textOffset, blockIndex: picture.blockIndex,
+                                    inline: picture.inline, block: rowStart + at, inlineSize: picture.inlineSize, blockSize: picture.blockSize))
+                                page.extend(picture.textOffset..<(picture.textOffset + 1))
+                            }
+                            reach = at + piece.extent
+                            taken += 1
+                            left[index].removeFirst()
+                        }
+                        page.boxes[placedBox].lines = firstLine..<page.lines.count
+                        page.boxes[placedBox].images = firstImage..<page.images.count
+                        page.boxes[placedBox].endsHere = left[index].isEmpty
+                        used = max(used, reach + (left[index].isEmpty ? box.paddingAfter : 0))
+                    }
+                    let more = left.contains { !$0.isEmpty }
+                    // To the page's end where it goes on, as far as its longest cell where it ends.
+                    let size = more ? max(used, room) : used
+                    for placedBox in pieceBoxes { page.boxes[placedBox].blockSize = size }
+                    position = rowStart + size
+                    first = false
+                    guard more else { break }
+                    closeTableBox(ends: false)
+                    newPage()
+                    openTableBox()
+                    if let placed = tablePlaced { page.boxes[placed].startsHere = false }
+                }
+                position += spacing
+            }
+            func placeLongGroup(_ group: Range<Int>) {
+                // Where each row starts in the group, and what every cell holds, by where
+                // it stands in the group (its own top, its padding, the piece's place in it).
+                var tops: [Int: CGFloat] = [:]
+                var top: CGFloat = 0
+                for row in group {
+                    tops[row] = top
+                    top += rowHeights[row] + spacing
+                }
+                let whole = top - spacing
+                typealias Held = (cell: SetCell, start: CGFloat, end: CGFloat, pieces: [(piece: Piece, at: CGFloat)])
+                let cells: [Held] = group.flatMap { row in
+                    setRows[row].map { cell -> Held in
+                        let box = cellBox(cell.cell.box)
+                        let start = tops[row] ?? 0
+                        let last = min(cell.rows.upperBound, group.upperBound) - 1
+                        let end = (tops[last] ?? start) + rowHeights[last]
+                        let pieces = (cell.lines.map { Piece.line($0.0, $0.1) } + cell.images.map { Piece.picture($0) })
+                            .sorted { $0.start < $1.start }.map { (piece: $0, at: start + box.paddingBefore + $0.start) }
+                        return (cell, start, end, pieces)
+                    }
+                }
+                var done: CGFloat = 0
+                var first = true
+                while done < whole - 0.01 {
+                    var room = blockExtent - position
+                    // No room for a line: on the next page.
+                    let least = cells.flatMap(\.pieces).filter { $0.at >= done - 0.01 }.map { $0.at + $0.piece.extent - done }.min() ?? 0
+                    if least > room + 0.01, !page.isEmpty {
+                        closeTableBox(ends: false)
+                        newPage()
+                        openTableBox()
+                        if let placed = tablePlaced { page.boxes[placed].startsHere = false }
+                        room = blockExtent - position
+                    }
+                    // Cut where the page ends, or before whatever would stand across the cut.
+                    var cut = min(whole, done + room)
+                    var moved = true
+                    while moved {
+                        moved = false
+                        for held in cells {
+                            for entry in held.pieces where entry.at >= done - 0.01 && entry.at < cut - 0.01 && entry.at + entry.piece.extent > cut + 0.01 {
+                                cut = entry.at
+                                moved = true
+                            }
+                        }
+                    }
+                    if cut <= done + 0.01 {
+                        // A piece longer than a page: on it all the same, nothing left out.
+                        cut = (cells.flatMap(\.pieces).filter { $0.at >= done - 0.01 }.map { $0.at + $0.piece.extent }.min() ?? whole)
+                    }
+                    // A row's end close before the cut: cut there, so that the cells do not
+                    // end with an empty strip of the next row.
+                    if cut < whole - 0.01 {
+                        let ends = group.compactMap { row -> CGFloat? in
+                            let end = (tops[row] ?? 0) + rowHeights[row] + spacing
+                            return end > done + 0.01 && end <= cut + 0.01 ? end : nil
+                        }
+                        let nothingBetween = { (from: CGFloat) in
+                            !cells.contains { $0.pieces.contains { $0.at >= from - 0.01 && $0.at < cut - 0.01 } }
+                        }
+                        if let end = ends.max(), end < cut, nothingBetween(end) { cut = end }
+                    }
+                    let pageStart = position
+                    for held in cells where held.end > done + 0.01 && held.start < cut - 0.01 {
+                        let from = max(held.start, done), to = min(held.end, cut)
+                        let firstLine = page.lines.count, firstImage = page.images.count
+                        page.boxes.append(STPlacedBox(
+                            box: held.cell.cell.box, inline: held.cell.inline, block: pageStart + from - done, inlineSize: held.cell.length,
+                            blockSize: max(0, to - from), startsHere: first || held.start >= done - 0.01, endsHere: held.end <= cut + 0.01,
+                            parent: tablePlaced ?? open.last?.placed,
+                            lines: firstLine..<firstLine, images: firstImage..<firstImage))
+                        let placedBox = page.boxes.count - 1
+                        for entry in held.pieces where entry.at >= done - 0.01 && entry.at < cut - 0.01 {
+                            let at = pageStart + entry.at - done
+                            switch entry.piece {
+                            case .line(let line, _):
+                                page.lines.append(STPlacedLine(line: line, blockPosition: at))
+                                page.extend(line.range)
+                            case .picture(let picture):
+                                page.images.append(STPlacedImage(
+                                    id: picture.id, blendMode: picture.blendMode, fit: picture.fit, fitPosition: picture.fitPosition,
+                                    textOffset: picture.textOffset, blockIndex: picture.blockIndex,
+                                    inline: picture.inline, block: at, inlineSize: picture.inlineSize, blockSize: picture.blockSize))
+                                page.extend(picture.textOffset..<(picture.textOffset + 1))
+                            }
+                        }
+                        page.boxes[placedBox].lines = firstLine..<page.lines.count
+                        page.boxes[placedBox].images = firstImage..<page.images.count
+                    }
+                    position = pageStart + cut - done
+                    done = cut
+                    first = false
+                    guard done < whole - 0.01 else { break }
+                    closeTableBox(ends: false)
+                    newPage()
+                    openTableBox()
+                    if let placed = tablePlaced { page.boxes[placed].startsHere = false }
+                }
+                position += spacing
+            }
             var r = 0
             while r < setRows.count {
                 // The rows a cell going down holds together: kept on one page.
@@ -1857,6 +2277,25 @@ public final class STTypesetter {
                     scan += 1
                 }
                 let groupHeight = across(r..<groupEnd)
+                if groupEnd > r + 1, groupHeight > blockExtent + 0.01 {
+                    // Rows held together by cells going down them, longer together than a
+                    // page (a table whose first columns name what the rows beside them are
+                    // of, each over many rows): set as they stand, and cut where a page ends,
+                    // between lines; the cells going down go on on the next page.
+                    placeLongGroup(r..<groupEnd)
+                    rowsPlaced += groupEnd - r
+                    r = groupEnd
+                    continue
+                }
+                if groupEnd == r + 1, groupHeight > blockExtent + 0.01 {
+                    // A row longer than a page (a year of a table of years, on a small
+                    // screen): its cells' lines go on from page to page, each cell's from
+                    // the page's start; set whole it ran off the page's end.
+                    placeLongRow(setRows[r])
+                    rowsPlaced += 1
+                    r = groupEnd
+                    continue
+                }
                 if position + groupHeight > blockExtent + 0.01, !page.isEmpty {
                     if rowsPlaced == 0 {
                         // Nothing of it on this page yet: the whole table on the next.
@@ -1878,7 +2317,7 @@ public final class STTypesetter {
                     let rowStart = position
                     for cell in setRows[row] {
                         let rowHeight = across(cell.rows)
-                        let box = section.boxes[cell.cell.box]
+                        let box = cellBox(cell.cell.box)
                         let contentRoom = rowHeight - box.paddingBefore - box.paddingAfter
                         let shift = max(0, contentRoom - cell.height) * cell.cell.align
                         let firstLine = page.lines.count
@@ -2097,9 +2536,15 @@ public final class STTypesetter {
                 var set = setFlow(lineRoom)
                 var lineLength = lineRoom
                 if flow.lineLength == nil, let first = set.first {
-                    let longest = first.lines.map { line in
-                        zip(line.line.positions, line.line.advances).map { $0 + $1 }.max() ?? 0
-                    }.max() ?? 0
+                    // What a line takes, whichever way it is aligned (set at the end of the
+                    // room, a page number floated at the end would be as long as the room):
+                    // its items, after its block's margin and indent.
+                    let longest = max(first.lines.map { line in
+                        let style = line.line.block.block.style
+                        let reach = zip(line.line.positions, line.line.advances).map { $0 + $1 }.max() ?? 0
+                        guard style.align == .end || style.align == .center else { return reach }
+                        return min(reach, line.line.advances.reduce(0, +) + style.marginStart + max(0, style.textIndent))
+                    }.max() ?? 0, first.images.map(\.inlineSize).max() ?? 0)
                     if longest > 0, longest + 1 < lineRoom {
                         // As long as its longest line, its lines set again to that length.
                         lineLength = longest + 1
@@ -2143,19 +2588,31 @@ public final class STTypesetter {
                 // its margin box, as a floated image is, where it leaves them room for a few
                 // characters.
                 if let atEnd = flow.floatsAtEnd {
-                    let startTaken = floats.filter { !$0.atEnd && $0.end > position }.map(\.length).reduce(0, +)
-                    let endTaken = floats.filter { $0.atEnd && $0.end > position }.map(\.length).reduce(0, +)
                     let length = max(0, margins.start + borderInline + margins.end)
-                    if available - startTaken - endTaken - length >= block.baseStyle.size * 4 {
+                    // No room beside the floats before it: below them, the nearest end
+                    // first, as far as it takes.
+                    while floatPlace(atEnd: atEnd, length: length, at: position, room: available) == nil,
+                          let next = floats.filter({ $0.end > position }).map(\.end).min() {
+                        position = next
+                        carryPositive = 0
+                        carryNegative = 0
+                    }
+                    if var from = floatPlace(atEnd: atEnd, length: length, at: position, room: available) {
                         let room = blockExtent - position - carryPositive - carryNegative
-                        if margins.before + borderBlock > room + 0.01, !page.isEmpty { newPage() }
+                        if margins.before + borderBlock > room + 0.01, !page.isEmpty {
+                            // On a new page it stands beside none of the floats of the page left:
+                            // kept where it would have stood beside them, it stood away from the
+                            // page's edge, and the float after it, told the edge was taken, on it.
+                            newPage()
+                            from = 0
+                        }
                         beginContent()
                         let at = position + margins.before
                         let inline = atEnd
-                            ? style.marginStart + available - endTaken - margins.end - borderInline
-                            : style.marginStart + startTaken + margins.start
+                            ? style.marginStart + available - from - margins.end - borderInline
+                            : style.marginStart + from + margins.start
                         place(inline: inline, at: at)
-                        floats.append((atEnd, length, max(position, at + borderBlock + margins.after)))
+                        floats.append((atEnd, from, length, max(position, at + borderBlock + margins.after)))
                         continue
                     }
                     if !orthogonal {
@@ -2292,7 +2749,8 @@ public final class STTypesetter {
                 var blockSize = vertical ? natural.width : natural.height
                 let remaining = blockExtent - position - carryPositive - carryNegative
                 if blockSize > remaining, !page.isEmpty, blockSize <= blockExtent || fit {
-                    newPage()
+                    // What is kept with it (its title in a line before it) going with it.
+                    _ = newPageWithHeading(marginBefore: style.marginBefore)
                 }
                 beginContent()
                 backgroundStart = position
@@ -2326,21 +2784,31 @@ public final class STTypesetter {
                 if position + carryPositive + carryNegative + blockSize > blockExtent + 0.01, !page.isEmpty { newPage() }
                 beginContent()
                 // Beside the floats there already.
-                let startTaken = floats.filter { !$0.atEnd && $0.end > position }.map(\.length).reduce(0, +)
-                let endTaken = floats.filter { $0.atEnd && $0.end > position }.map(\.length).reduce(0, +)
+                let startTaken = floatReach(atEnd: false, at: position), endTaken = floatReach(atEnd: true, at: position)
                 let inline = atEnd ? inlineStart + measure - endTaken - inlineSize : inlineStart + startTaken
                 let imageStyle = block.inlines.first?.style
                 page.images.append(STPlacedImage(
                     id: id, blendMode: imageStyle?.blendMode ?? .normal, textOffset: block.offset, blockIndex: index,
                     inline: inline, block: position, inlineSize: inlineSize, blockSize: blockSize))
                 page.extend(block.offset..<(block.offset + 1))
-                floats.append((atEnd, inlineSize + gap, position + blockSize + after))
+                floats.append((atEnd, atEnd ? endTaken : startTaken, inlineSize + gap, position + blockSize + after))
                 // What follows starts beside it, not after it.
                 carry(style.marginAfter)
                 continue
             case .boxStart, .boxEnd, .table:
                 break
             default:
+                // No room for a few characters beside the floats: below them, the nearest
+                // end first, as far as it takes.
+                while true {
+                    let top = position + carryPositive + carryNegative
+                    let beside = floats.filter { $0.end > top }
+                    guard measure - floatReach(atEnd: false, at: top) - floatReach(atEnd: true, at: top) < block.baseStyle.size * 4,
+                          let next = beside.map(\.end).min() else { break }
+                    position = next
+                    carryPositive = 0
+                    carryNegative = 0
+                }
                 let set = setBlockWithFirstLine(block, index: index, vertical: vertical, measure: measure)
                 let lines: [STLine]
                 if floats.contains(where: { $0.end > position + carryPositive + carryNegative }) {
@@ -2348,8 +2816,7 @@ public final class STTypesetter {
                     let top = position + carryPositive + carryNegative
                     lines = self.lines(of: set) { across in
                         let at = top + across
-                        let startTaken = floats.filter { !$0.atEnd && $0.end > at }.map(\.length).reduce(0, +)
-                        let endTaken = floats.filter { $0.atEnd && $0.end > at }.map(\.length).reduce(0, +)
+                        let startTaken = floatReach(atEnd: false, at: at), endTaken = floatReach(atEnd: true, at: at)
                         return (inlineStart + startTaken, measure - startTaken - endTaken)
                     }
                 } else {
