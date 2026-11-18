@@ -102,6 +102,11 @@ final class STSetBlock: @unchecked Sendable {
     var rubies: [STRuby] = []
     /// The items a line ends before with a hyphen.
     var hyphens = Set<Int>()
+    /// Where the first line ends, found with its items in their ::first-line style, and the
+    /// measure it was found for: the line ends there again when broken for that measure. (Its
+    /// items alone are in that style: broken anew, the line took in what follows them in the
+    /// block's own, smaller, style where that fits.)
+    var firstLineEnd: (item: Int, measure: CGFloat)?
     /// Set down a vertical line.
     var vertical = false
     /// The paragraph's embedding level: 1 where it runs right to left.
@@ -953,6 +958,11 @@ public final class STTypesetter {
         var lines: [Range<Int>] = []
         var start = 0
         while start < items.count {
+            if start == 0, let known = set.firstLineEnd, abs(known.measure - firstMeasure) < 0.01, known.item <= items.count {
+                lines.append(0..<known.item)
+                start = known.item
+                continue
+            }
             var available = lines.isEmpty ? firstMeasure : measure
             // An opening mark at the paragraph's start hangs outside the line (hanging-punctuation: first).
             if spacing.hangsFirst, lines.isEmpty, start == 0, !items.isEmpty, Self.opens(items[0].scalar) { available += items[0].squeezedAdvance }
@@ -1379,9 +1389,13 @@ public final class STTypesetter {
         styled.inlines = block.inlines.map(firstLine.apply)
         styled.firstLine = nil
         let other = setBlock(styled, index: index, vertical: vertical)
+        let firstMeasure = max(1, measure - block.style.textIndent)
         guard other.items.count == set.items.count,
-              let first = breakLines(other, firstMeasure: max(1, measure - block.style.textIndent), measure: measure).first else { return set }
+              let first = breakLines(other, firstMeasure: firstMeasure, measure: measure).first, !first.isEmpty else { return set }
         for item in first { set.items[item] = other.items[item] }
+        set.firstLineEnd = (first.upperBound, firstMeasure)
+        // A word hyphenated at the first line's end: its hyphen drawn.
+        if other.hyphens.contains(first.upperBound) { set.hyphens.insert(first.upperBound) }
         return set
     }
 
