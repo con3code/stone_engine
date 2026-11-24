@@ -519,6 +519,15 @@ public struct STReaderSettings: Sendable, Hashable {
     /// larger throughout), or with margins not in ems, is set solid too, what is over left at
     /// its lines' end. Off, its lines are as long as the room it has.
     public var wholeCharacterLines = false
+    /// What is left over at a line's end taken up by its punctuation before the gaps between
+    /// its characters are touched, so that the characters stay set solid: where a line is
+    /// short by as much as taking in its next character would make it long (the half em left
+    /// by marks set in half their width, 」「), the character is taken in and the line's
+    /// punctuation squeezed (追い込み before 追い出し for every line, JLREQ 3.8.2, not only
+    /// where 禁則 asks). Off, such lines are lengthened between all their characters. (An
+    /// opening mark at a line's start keeps to the line's edge either way: the lines' starts
+    /// stand level.)
+    public var keepsLinesSolid = false
     /// A quarter em between Japanese and Latin letters and digits (和欧間の四分アキ) where the
     /// book does not say; off, they are set solid.
     public var autospaces = true

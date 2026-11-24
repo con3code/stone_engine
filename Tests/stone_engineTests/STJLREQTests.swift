@@ -77,6 +77,35 @@ final class STJLREQTests: XCTestCase {
                        page([.text(text, style)], em: 10.5, blockStyle: centred).lines[0].line.positions[0], accuracy: 0.01)
     }
 
+    // MARK: 3.8.2 端数は約物で（字間はベタのまま）
+
+    func testWhatIsOverAtALinesEndIsTakenUpByItsPunctuationWhereAskedFor() {
+        var settings = STReaderSettings()
+        settings.keepsLinesSolid = true
+        // 」「 in half their width leave the line half an em short of ten characters: the next
+        // character is taken in and the line's punctuation gives the half, the characters solid. (Without,
+        // it is left out and the line lengthened between them all.)
+        let text = "あいう」「えお、かきくけこさしすせそ"
+        let loose = page([.text(text, style)], em: 10).lines[0].line
+        XCTAssertEqual(loose.advances.count, 10)
+        XCTAssertTrue(loose.advances.contains { $0 > size + 0.01 }, "lengthened between its characters")
+        let solid = page([.text(text, style)], em: 10, settings: settings).lines[0].line
+        XCTAssertEqual(solid.advances.count, 11)
+        XCTAssertEqual(solid.advances.reduce(0, +), size * 10, accuracy: 0.01)
+        // The closing bracket and the comma share the half em given (JLREQ 3.8.3: marks alike).
+        XCTAssertEqual(solid.advances[3] + solid.advances[7], size * 1.5, accuracy: 0.01)
+        for index in [0, 1, 2, 5, 6, 8, 9, 10] { XCTAssertEqual(solid.advances[index], size, accuracy: 0.01) }
+        // A line that fills its length is left as it is: nothing is taken in for its commas' sake.
+        let full = "あいうえ、おかき、くけこさしすせそ"
+        XCTAssertEqual(page([.text(full, style)], em: 10, settings: settings).lines[0].line.advances.count, 10)
+        // An opening mark at a line's start keeps to the line's edge (its half given), though
+        // the line is half an em short: the lines' starts stand level.
+        let opening = "あいうえおかきくけこ「さしすせそたちつてとなにぬねの"
+        let second = page([.text(opening, style)], em: 10, settings: settings).lines[1].line
+        XCTAssertEqual(second.positions[0] + size / 2, page([.text(opening, style)], em: 10, settings: settings).lines[0].line.positions[0],
+                       accuracy: 0.01, "its glyph's empty half before the line's start")
+    }
+
     // MARK: 3.1.4 連続する約物
 
     func testAClosingMarkBeforeAnOpeningOneKeepsTheHalfEmBetweenThem() {

@@ -1016,6 +1016,19 @@ public final class STTypesetter {
                         end = taken
                         break
                     }
+                    // The line short by as much as taking this character in makes it long (half
+                    // an em, where marks stand in half their width): taken in, the line's
+                    // punctuation squeezed and its characters left solid, rather than left out
+                    // and the line lengthened between them all.
+                    if settings.keepsLinesSolid, settings.squeezesPunctuation, spacing.takesIn,
+                       items[index].characterClass.ideographic || items[index].characterClass.punctuation != .whole,
+                       !items[index].characterClass.wordLetter, available - width > 0.01,
+                       canBreak(before: index, in: items, style: spacing),
+                       let taken = pushedIn(set, from: start, overflowing: index, width: width, available: available, style: spacing,
+                                            startTrimmed: trimsStart, atMost: available - width) {
+                        end = taken
+                        break
+                    }
                     var breakAt = index
                     while breakAt > start + 1, !canBreak(before: breakAt, in: items, style: spacing) { breakAt -= 1 }
                     // Hyphenated where the word allows it (hyphens: auto).
@@ -1081,7 +1094,7 @@ public final class STTypesetter {
     /// (追い込み): the end of what may not be parted from it, where squeezing the line from
     /// `start` makes room for it all; nil where it does not.
     private func pushedIn(_ set: STSetBlock, from start: Int, overflowing index: Int, width: CGFloat, available: CGFloat,
-                          style: STBlockStyle, startTrimmed: Bool) -> Int? {
+                          style: STBlockStyle, startTrimmed: Bool, atMost: CGFloat? = nil) -> Int? {
         let items = set.items
         var end = index + 1
         while end < items.count, end - index < 4, !canBreak(before: end, in: items, style: style) { end += 1 }
@@ -1091,6 +1104,8 @@ public final class STTypesetter {
         total += Self.rubyTail(set, at: end - 1) - items[end - 1].autospaceAfter
         let over = total - available
         guard over > 0.01 else { return end }
+        // Only where it is no more than leaving it out would leave the line short.
+        if let atMost, over > atMost + 0.01 { return nil }
         var room: CGFloat = 0
         for i in start..<end {
             for step in 0...3 where !(step == 2 && i == start && startTrimmed) { room += squeezable(items[i], step: step, atEnd: i == end - 1) }
