@@ -1337,6 +1337,35 @@ public final class STTypesetter {
         return (0..<count).map { starts[$0] - items[$0].startTrim }
     }
 
+    /// A line's length for a block: as long as a whole number of the block's characters
+    /// where the reader asks for it (`STReaderSettings.wholeCharacterLines`) and the block is
+    /// Japanese text set from the start or justified; else as given. What is taken off (less
+    /// than a character) is left at the line's end.
+    func wholeMeasure(_ measure: CGFloat, of set: STSetBlock) -> CGFloat {
+        guard settings.wholeCharacterLines, measure.isFinite, set.baseLevel == 0 else { return measure }
+        let align = alignment(of: set.block.style)
+        guard align == .start || align == .justify else { return measure }
+        // Japanese: most of what it holds is ideographs and kana (or their punctuation). Its
+        // characters' size is the one most of those are set in (a word set larger or a note
+        // smaller within it does not change the block's).
+        var wide = 0, other = 0
+        var sizes: [CGFloat: Int] = [:]
+        for item in set.items where item.scalar > 0x20 && item.scalar != 0x3000 {
+            if item.scalar >= 0x2E80 {
+                wide += 1
+                sizes[item.style.size, default: 0] += 1
+            } else {
+                other += 1
+            }
+        }
+        guard wide > other, let size = sizes.max(by: { ($0.value, $0.key) < ($1.value, $1.key) })?.key,
+              size > 0, measure >= size * 4, measure < size * 1000 else { return measure }
+        // (A length a hair under a whole number, as widths worked out from the text are, is
+        // left as it is: nothing is taken off it.)
+        let whole = ((measure / size) + 0.02).rounded(.down) * size
+        return measure - whole > size * 0.02 ? whole : measure
+    }
+
     /// The lines of a block where each may be shortened (beside a float): `room(line)` gives
     /// a line's start along and its length, the lines' extents taken as the block's usual one.
     func lines(of set: STSetBlock, room: (CGFloat) -> (start: CGFloat, measure: CGFloat)) -> [STLine] {
@@ -1348,7 +1377,7 @@ public final class STTypesetter {
         var across: CGFloat = 0
         while start < set.items.count {
             let here = room(across)
-            let measure = max(set.block.baseStyle.size, here.measure)
+            let measure = wholeMeasure(max(set.block.baseStyle.size, here.measure), of: set)
             let first = ranges.isEmpty ? measure - style.textIndent : measure
             let next = breakLines(set, from: start, measure: max(1, first))
             ranges.append(next)
@@ -1385,6 +1414,7 @@ public final class STTypesetter {
     func setBlockWithFirstLine(_ block: STBlock, index: Int, vertical: Bool, measure: CGFloat) -> STSetBlock {
         let set = setBlock(block, index: index, vertical: vertical)
         guard let firstLine = block.firstLine else { return set }
+        let measure = wholeMeasure(measure, of: set)
         var styled = block
         styled.inlines = block.inlines.map(firstLine.apply)
         styled.firstLine = nil
@@ -1402,6 +1432,7 @@ public final class STTypesetter {
     /// The lines of a block, `measure` long, set and with their extents across.
     func lines(of set: STSetBlock, measure: CGFloat, inlineStart: CGFloat) -> [STLine] {
         let style = set.block.style
+        let measure = wholeMeasure(measure, of: set)
         let firstMeasure = measure - style.textIndent
         var ranges = breakLines(set, firstMeasure: max(1, firstMeasure), measure: measure)
         if ranges.isEmpty { ranges = [0..<0] }

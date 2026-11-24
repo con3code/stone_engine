@@ -44,6 +44,39 @@ final class STJLREQTests: XCTestCase {
         page([.text(text, style)], em: em, settings: settings, blockStyle: blockStyle).lines[0].line
     }
 
+    // MARK: 3.1.3 行長は文字サイズの整数倍
+
+    func testABlocksLinesAreAWholeNumberOfItsCharactersLongWhereAskedFor() {
+        // Room for 10.5 characters: set to it, every line is stretched by half a character;
+        // as long as ten characters, the lines are set solid and what is over is at their end.
+        let text = String(repeating: "あいうえおかきくけこさしすせそ", count: 3)
+        let loose = page([.text(text, style)], em: 10.5)
+        XCTAssertEqual(loose.lines[0].line.advances.reduce(0, +), size * 10.5, accuracy: 0.01)
+        var settings = STReaderSettings()
+        settings.wholeCharacterLines = true
+        let solid = page([.text(text, style)], em: 10.5, settings: settings)
+        XCTAssertEqual(solid.lines.count, 5)
+        for placed in solid.lines.dropLast() {
+            XCTAssertEqual(placed.line.advances.count, 10)
+            XCTAssertTrue(placed.line.advances.allSatisfy { abs($0 - size) < 0.01 })
+            XCTAssertEqual(placed.line.positions[0], loose.lines[0].line.positions[0], accuracy: 0.01, "from the same start")
+        }
+        // Down the page too.
+        let down = page([.text(text, style)], em: 10.5, settings: settings, writingMode: .vertical)
+        XCTAssertTrue(down.lines[0].line.advances.allSatisfy { abs($0 - size) < 0.01 })
+        // Room that is a whole number already stays as it is.
+        XCTAssertEqual(page([.text(text, style)], em: 10, settings: settings).lines[0].line.advances.count, 10)
+        // Western text, and lines centred or set at the end, are as long as their room.
+        let latin = String(repeating: "The quick brown fox jumps over the lazy dog. ", count: 3)
+        XCTAssertEqual(page([.text(latin, style)], em: 10.5, settings: settings).lines[0].line.advances.reduce(0, +),
+                       page([.text(latin, style)], em: 10.5).lines[0].line.advances.reduce(0, +), accuracy: 0.01)
+        var centred = STBlockStyle()
+        centred.align = .center
+        centred.alignGiven = true
+        XCTAssertEqual(page([.text(text, style)], em: 10.5, settings: settings, blockStyle: centred).lines[0].line.positions[0],
+                       page([.text(text, style)], em: 10.5, blockStyle: centred).lines[0].line.positions[0], accuracy: 0.01)
+    }
+
     // MARK: 3.1.4 連続する約物
 
     func testAClosingMarkBeforeAnOpeningOneKeepsTheHalfEmBetweenThem() {

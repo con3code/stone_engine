@@ -513,6 +513,12 @@ public struct STReaderSettings: Sendable, Hashable {
     /// Lines justified (両端揃え) where the book gives no alignment, as Japanese books are set;
     /// off, they are set at the start.
     public var justifies = true
+    /// Each block's lines as long as a whole number of its own characters (JLREQ 3.1.3: 行長は
+    /// 文字サイズの整数倍), where its text is Japanese and set from the start or justified: a
+    /// block in another size than the page was measured for (a note set smaller, a book set
+    /// larger throughout), or with margins not in ems, is set solid too, what is over left at
+    /// its lines' end. Off, its lines are as long as the room it has.
+    public var wholeCharacterLines = false
     /// A quarter em between Japanese and Latin letters and digits (和欧間の四分アキ) where the
     /// book does not say; off, they are set solid.
     public var autospaces = true
