@@ -52,8 +52,8 @@ struct STCharacterClass: @unchecked Sendable {
         let found = STCharacterClass(
             upright: isUpright(value),
             punctuation: STPunctuation.valueOf(charatcter: character),
-            notStarting: STKinsoku.notStartingCharSet.contains(scalar),
-            notEnding: STKinsoku.notEndingCharSet.contains(scalar),
+            notStarting: STPageKinsoku.notStarting.contains(scalar),
+            notEnding: STPageKinsoku.notEnding.contains(scalar),
             hangs: STKinsoku.hangingCharSet.contains(scalar) || value == 0xFF0C || value == 0xFF0E,
             wordLetter: wordLetter,
             space: space,
@@ -98,4 +98,15 @@ struct STCharacterClass: @unchecked Sendable {
         default: return false
         }
     }
+}
+
+/// 行頭禁則・行末禁則 as pages are set by: all of JLREQ's classes (the strict rule, CSS's
+/// line-break: strict), apart from the label engine's own sets (`STKinsoku`).
+enum STPageKinsoku {
+    /// 行頭禁則: the characters a line does not start with, all of JLREQ's classes for them
+    /// (the strict rule, CSS's line-break: strict): closing brackets, hyphens (‐ – 〜 ゠),
+    /// dividing punctuation (？！‼⁇⁈⁉), middle dots (・：；), full stops and commas (。．、，),
+    /// iteration marks (ヽヾゝゞ々〻), the prolonged sound mark ー and small kana.
+    static let notStarting: Set<Unicode.Scalar> = Set(" ,.?:;!)）]］}｝｣、〕〉》」』】〙〗〟’”｠⦆»ヽヾゝゞーｰァィゥェォッャュョヮヵヶぁぃぅぇぉっゃゅょゎゕゖㇰㇱㇲㇳㇴㇵㇶㇷㇸㇹㇺㇻㇼㇽㇾㇿｧｨｩｪｫｬｭｮｯ々〻？！!‼⁇⁈⁉。．.｡，、､・･：；‐–〜～゠™".unicodeScalars)
+    static let notEnding: Set<Unicode.Scalar> = Set("(（[［{｛｢〔〈《「『【〘〖〝‘“｟⦅«".unicodeScalars)
 }

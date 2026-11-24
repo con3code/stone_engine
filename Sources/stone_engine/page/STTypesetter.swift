@@ -74,7 +74,7 @@ struct STItem: @unchecked Sendable {
 }
 
 /// Ruby over items of a block.
-struct STRuby: @unchecked Sendable {
+struct STSetRuby: @unchecked Sendable {
     var text: String
     var style: STTextStyle
     var items: Range<Int>
@@ -99,7 +99,7 @@ final class STSetBlock: @unchecked Sendable {
     let block: STBlock
     let index: Int
     var items: [STItem] = []
-    var rubies: [STRuby] = []
+    var rubies: [STSetRuby] = []
     /// The items a line ends before with a hyphen.
     var hyphens = Set<Int>()
     /// Where the first line ends, found with its items in their ::first-line style, and the
@@ -335,7 +335,7 @@ public final class STTypesetter {
             sum + (vertical && STCharacterClass.of(pair.0).upright ? pair.1.verticalAdvance : pair.1.advance)
         }
         let index = set.rubies.count
-        set.rubies.append(STRuby(text: ruby, style: rubyStyle, items: first..<set.items.count, shapes: shapes, length: rubyLength))
+        set.rubies.append(STSetRuby(text: ruby, style: rubyStyle, items: first..<set.items.count, shapes: shapes, length: rubyLength))
         for item in first..<set.items.count {
             if set.items[item].ruby == nil { set.items[item].ruby = index } else { set.items[item].outerRuby = index }
         }
@@ -432,7 +432,7 @@ public final class STTypesetter {
         let bases = units.map { unit in set.items[unit.items].reduce(CGFloat(0)) { $0 + $1.squeezedAdvance } }
         guard zip(units, bases).contains(where: { $0.length > $1 + 0.01 }) else { return }
         let first = units[0].items.lowerBound, last = units[units.count - 1].items.upperBound
-        func room(_ index: Int, _ ruby: STRuby) -> CGFloat {
+        func room(_ index: Int, _ ruby: STSetRuby) -> CGFloat {
             guard set.items.indices.contains(index), set.items[index].ruby == nil, Self.isKana(set.items[index].scalar) else { return 0 }
             return ruby.style.size
         }

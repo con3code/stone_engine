@@ -8,7 +8,7 @@
 
 - 縦組み用字形への置き換え（`STTextVerticalSubstitutionGlyphWithGlyph`、GSUB の vrt2 / vert）
 - 約物の分類（`STPunctuation`）
-- 禁則の文字表（`STKinsoku`）。行頭禁則の表は、JLREQ の行頭禁則の文字クラスをすべて含むように足した（全角の「！」「，」「．」「：」「；」、「・」「･」、「ゝ」「ゞ」「ー」、「‐」「–」「〜」「゠」、「}」「⦆」「｣」。`STLabel` / `STTextView` の行分けにも効く）。JS 版（stone_engine_js の layout.ts）の同じ修正に合わせた
+- 禁則の文字表。ページ組版は専用の表（`STPageKinsoku`、`page/STCharacterClass.swift`）を引く。JLREQ の行頭禁則の文字クラスをすべて含む（全角の「！」「，」「．」「：」「；」、「・」「･」、「ゝ」「ゞ」「ー」、「‐」「–」「〜」「゠」、「}」「⦆」「｣」）。JS 版（stone_engine_js の layout.ts）の同じ修正に合わせた。`STLabel` / `STTextView` の行分けは upstream の表（`STKinsoku`）のまま（upstream 0.6.2 を取り込んだときに分けた。upstream のテストがその表を前提にしているため）
 
 ## できること
 
