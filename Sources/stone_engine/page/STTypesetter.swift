@@ -2495,9 +2495,16 @@ public final class STTypesetter {
                               inColumns: true, vertical: vertical)
             }
             /// Whether columns this long hold it all, no box kept whole (break-inside: avoid) split.
-            func holds(_ pages: [STPage]) -> Bool {
+            /// (Within `height`, where given: a line is set in a column too short for it
+            /// rather than in none, so as few lines as columns are held by columns of no length.)
+            func holds(_ pages: [STPage], within height: CGFloat? = nil) -> Bool {
                 pages.count <= count && !pages.contains { page in
                     page.boxes.contains { !$0.startsHere && section.boxes.indices.contains($0.box) && section.boxes[$0.box].keepTogether }
+                        || height.map { height in
+                            page.lines.contains { $0.blockPosition + $0.line.extent > height + 0.5 }
+                                || page.images.contains { $0.block + $0.blockSize > height + 0.5 }
+                                || page.boxes.contains { $0.block + $0.blockSize > height + 0.5 }
+                        } ?? false
                 }
             }
             var height = max(1, columns.blockSize ?? (blockExtent - position))
@@ -2517,7 +2524,7 @@ public final class STTypesetter {
                 var low: CGFloat = 1, high = height
                 for _ in 0..<18 {
                     let middle = (low + high) / 2
-                    if holds(run(middle)) { high = middle } else { low = middle }
+                    if holds(run(middle), within: middle) { high = middle } else { low = middle }
                 }
                 height = columns.blockSize ?? high
                 pages = run(high)

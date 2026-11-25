@@ -23,6 +23,11 @@ public struct STPlacedCharacter: Sendable, Hashable {
     public let link: String?
     /// A forced line break, or a space: there in the text, nothing drawn.
     public let isBlank: Bool
+    /// Its line runs down the page (a block of the other writing mode has its own), and it
+    /// is read against its line's direction (right to left in a line set left to right):
+    /// which of its box's edges its start and its end are at.
+    public let isVertical: Bool
+    public let isReversed: Bool
 }
 
 /// Ruby on a page: the base's text range and its reading.
@@ -93,13 +98,15 @@ extension STPage {
                 let start = set.block.offset + item.range.lowerBound
                 result.append(STPlacedCharacter(
                     range: start..<(set.block.offset + item.range.upperBound), rect: rect, line: lineIndex,
-                    block: set.index, link: hidden ? nil : item.style.link, isBlank: hidden || item.isLineBreak || item.isSpace))
+                    block: set.index, link: hidden ? nil : item.style.link, isBlank: hidden || item.isLineBreak || item.isSpace,
+                    isVertical: mapper.vertical, isReversed: item.level % 2 == 1))
             }
         }
         for image in images {
             let rect = mapper.rect(inline: image.inline, block: image.block, inlineSize: image.inlineSize, blockSize: image.blockSize)
             result.append(STPlacedCharacter(
-                range: image.textOffset..<(image.textOffset + 1), rect: rect, line: -1, block: image.blockIndex, link: nil, isBlank: false))
+                range: image.textOffset..<(image.textOffset + 1), rect: rect, line: -1, block: image.blockIndex, link: nil, isBlank: false,
+                isVertical: mapper.vertical, isReversed: false))
         }
         // The blocks of the other writing mode, in their places, their lines numbered after
         // the page's and the flows' before them.
@@ -110,7 +117,8 @@ extension STPage {
             defer { base += (inner.map(\.line).max() ?? -1) + 1 }
             result += inner.map { character in
                 STPlacedCharacter(range: character.range, rect: character.rect, line: character.line >= 0 ? character.line + base : -1,
-                                  block: character.block, link: character.link, isBlank: character.isBlank)
+                                  block: character.block, link: character.link, isBlank: character.isBlank,
+                                  isVertical: character.isVertical, isReversed: character.isReversed)
             }
         }
         return result

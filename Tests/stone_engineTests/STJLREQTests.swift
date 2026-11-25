@@ -506,5 +506,18 @@ final class STJLREQTests: XCTestCase {
         XCTAssertEqual(mark.width, size * 0.6, accuracy: 0.01)
         XCTAssertEqual(mark.midX - body.midX, size * 0.3, accuracy: 0.01, "raised: toward the right")
     }
-}
 
+    func testACharacterSaysWhichWayItsLineRunsAndWhichWayItIsRead() {
+        // Hebrew within a line set left to right is read from its right; the rest from the left.
+        let geometry = STPageGeometry(size: CGSize(width: 400, height: 300), top: 20, left: 20, bottom: 20, right: 20)
+        let across = STSection(blocks: [STBlock(inlines: [.text("あい\u{5D0}\u{5D1}\u{5D2}う", style)], style: STBlockStyle())], writingMode: .horizontal)
+        let page = STTypesetter(settings: STReaderSettings()).paginate(across, geometry: geometry)[0]
+        let characters = page.characters(geometry: geometry, writingMode: .horizontal)
+        XCTAssertEqual(characters.map(\.isReversed), [false, false, true, true, true, false])
+        XCTAssertTrue(characters.allSatisfy { !$0.isVertical })
+        XCTAssertGreaterThan(characters[2].rect.minX, characters[4].rect.minX, "the first of them at the right")
+        let down = STSection(blocks: [STBlock(inlines: [.text("あい", style)], style: STBlockStyle())], writingMode: .vertical)
+        let vertical = STTypesetter(settings: STReaderSettings()).paginate(down, geometry: geometry)[0]
+        XCTAssertTrue(vertical.characters(geometry: geometry, writingMode: .vertical).allSatisfy { $0.isVertical && !$0.isReversed })
+    }
+}
