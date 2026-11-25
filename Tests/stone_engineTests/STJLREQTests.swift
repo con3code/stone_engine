@@ -106,6 +106,34 @@ final class STJLREQTests: XCTestCase {
                        accuracy: 0.01, "its glyph's empty half before the line's start")
     }
 
+    func testAMarkThatMayHangLeavesTheLinesCharactersWhereTheNeighbouringLinesHaveThem() {
+        var hanging = STBlockStyle()
+        hanging.hangsEnd = true
+        var held = STBlockStyle()
+        held.hangsEnd = false
+        var settings = STReaderSettings()
+        settings.keepsLinesSolid = true
+        // Ten characters fill the line and 、 follows: hung past its end, the comma within the
+        // line keeps its full width and every character stands under the one in the line before.
+        let text = "あいうえ、おかきくけ、さしすせそ"
+        let hung = page([.text(text, style)], em: 10, settings: settings, blockStyle: hanging).lines[0].line
+        XCTAssertEqual(hung.advances.count, 11)
+        for index in 0..<10 { XCTAssertEqual(hung.advances[index], size, accuracy: 0.01) }
+        XCTAssertEqual(hung.positions[10], hung.positions[0] + size * 10, accuracy: 0.01, "past the line's end")
+        // Where it may not hang it is taken in, the commas giving their halves.
+        let taken = page([.text(text, style)], em: 10, settings: settings, blockStyle: held).lines[0].line
+        XCTAssertEqual(taken.advances.count, 11)
+        XCTAssertEqual(taken.advances.reduce(0, +), size * 10, accuracy: 0.01)
+        // 」、 over a full line: 」 may not start the next, and is taken in for the comma's
+        // half; the 、 after it hangs and takes no room, so no more is squeezed for it.
+        let pair = "あいうえ、おかきくけ」、さしすせそ"
+        let both = page([.text(pair, style)], em: 10, settings: settings, blockStyle: hanging).lines[0].line
+        XCTAssertEqual(both.advances.count, 12)
+        XCTAssertEqual(both.advances[..<11].reduce(0, +), size * 10, accuracy: 0.01)
+        XCTAssertEqual(both.advances[4], size / 2, accuracy: 0.01)
+        for index in [0, 1, 2, 3, 5, 6, 7, 8, 9] { XCTAssertEqual(both.advances[index], size, accuracy: 0.01) }
+    }
+
     // MARK: 3.1.4 連続する約物
 
     func testAClosingMarkBeforeAnOpeningOneKeepsTheHalfEmBetweenThem() {

@@ -1099,15 +1099,19 @@ public final class STTypesetter {
         var end = index + 1
         while end < items.count, end - index < 4, !canBreak(before: end, in: items, style: style) { end += 1 }
         guard end >= items.count || canBreak(before: end, in: items, style: style) else { return nil }
+        // 、。 ending what is taken in hang past the line's end where they may (ぶら下げ): they
+        // take no room on the line, which is squeezed only for what stands before them.
+        let hangs = end - 1 > index && (style.hangsEnd ?? settings.hangsPunctuation) && items[end - 1].characterClass.hangs
+        let held = hangs ? end - 1 : end
         var total = width
-        for i in index..<end { total += items[i].squeezedAdvance }
-        total += Self.rubyTail(set, at: end - 1) - items[end - 1].autospaceAfter
+        for i in index..<held { total += items[i].squeezedAdvance }
+        total += Self.rubyTail(set, at: held - 1) - items[held - 1].autospaceAfter
         let over = total - available
         guard over > 0.01 else { return end }
         // Only where it is no more than leaving it out would leave the line short.
         if let atMost, over > atMost + 0.01 { return nil }
         var room: CGFloat = 0
-        for i in start..<end {
+        for i in start..<held {
             for step in 0...3 where !(step == 2 && i == start && startTrimmed) { room += squeezable(items[i], step: step, atEnd: i == end - 1) }
         }
         return room + 0.01 >= over ? end : nil
