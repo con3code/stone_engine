@@ -106,6 +106,31 @@ final class STJLREQTests: XCTestCase {
                        accuracy: 0.01, "its glyph's empty half before the line's start")
     }
 
+    func testAMarkKeptFullWidthAtALinesEndGivesNothingWhereTheLineIsSqueezed() {
+        // space-end: 」 ending the second line full width; the em the line is over comes from
+        // the marks within it (」「、、 a quarter each), not from the one at its end.
+        var block = STBlockStyle()
+        block.spacingEnd = .space
+        let text = "「あああ、いい、うううう。」「あああ、いい、うううう。」あああ「あああ、いい、うううう。」あああ「あああ、いい、うううう。」"
+        let second = page([.text(text, style)], em: 21, blockStyle: block).lines[1].line
+        XCTAssertEqual(second.advances.count, 23)
+        XCTAssertEqual(second.advances[22], size, accuracy: 0.01, "full width at the line's end")
+        XCTAssertEqual(second.advances.reduce(0, +), size * 21, accuracy: 0.01)
+        for index in [5, 9, 13, 16] { XCTAssertEqual(second.advances[index], size * 0.75, accuracy: 0.01) }
+    }
+
+    func testLinesThatBreakAnywhereHangNothing() {
+        // line-break: anywhere: no 禁則, so 、 after a full line starts the next; not hung
+        // though 、。 hang elsewhere.
+        var block = STBlockStyle()
+        block.hangsEnd = true
+        block.lineBreak = .anywhere
+        let text = "ファッション・ショー、ファッション・ショー。"
+        XCTAssertEqual(lines(text, em: 10, blockStyle: block), ["ファッション・ショー", "、ファッション・ショ", "ー。"])
+        block.lineBreak = .strict
+        XCTAssertEqual(lines(text, em: 10, blockStyle: block).first, "ファッション・ショー、")
+    }
+
     func testAMarkThatMayHangLeavesTheLinesCharactersWhereTheNeighbouringLinesHaveThem() {
         var hanging = STBlockStyle()
         hanging.hangsEnd = true

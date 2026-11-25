@@ -1002,7 +1002,7 @@ public final class STTypesetter {
                 }
                 if width + ending > available + 0.01, index > start {
                     // 、。 may hang past the end; spaces never push a line.
-                    if items[index].isSpace || ((spacing.hangsEnd ?? settings.hangsPunctuation) && items[index].characterClass.hangs
+                    if items[index].isSpace || (hangsEnd(spacing) && items[index].characterClass.hangs
                         && (index + 1 >= items.count || canBreak(before: index + 1, in: items, style: spacing))) {
                         end = index + 1
                         break
@@ -1062,6 +1062,13 @@ public final class STTypesetter {
         return lines
     }
 
+    /// Whether 、。 hang past a line's end in a block: as the book has it, else as the reader
+    /// does; never where lines break anywhere (line-break: anywhere), with no 禁則 to keep a
+    /// mark off the next line's start.
+    func hangsEnd(_ style: STBlockStyle) -> Bool {
+        style.lineBreak != .anywhere && (style.hangsEnd ?? settings.hangsPunctuation)
+    }
+
     // MARK: Adjusting lines (JLREQ 3.8)
 
     /// How much an item's spacing may give where a line is squeezed, in JLREQ 3.8.3's order:
@@ -1101,7 +1108,7 @@ public final class STTypesetter {
         guard end >= items.count || canBreak(before: end, in: items, style: style) else { return nil }
         // 、。 ending what is taken in hang past the line's end where they may (ぶら下げ): they
         // take no room on the line, which is squeezed only for what stands before them.
-        let hangs = end - 1 > index && (style.hangsEnd ?? settings.hangsPunctuation) && items[end - 1].characterClass.hangs
+        let hangs = end - 1 > index && hangsEnd(style) && items[end - 1].characterClass.hangs
         let held = hangs ? end - 1 : end
         var total = width
         for i in index..<held { total += items[i].squeezedAdvance }
@@ -1112,7 +1119,10 @@ public final class STTypesetter {
         if let atMost, over > atMost + 0.01 { return nil }
         var room: CGFloat = 0
         for i in start..<held {
-            for step in 0...3 where !(step == 2 && i == start && startTrimmed) { room += squeezable(items[i], step: step, atEnd: i == end - 1) }
+            // Not what the marks at the line's ends have given or keep (trimmed at its start;
+            // full width there or at its end: space-start, space-end).
+            let kept = (i == start && (startTrimmed || style.spacingStart == .space)) || (i == end - 1 && style.spacingEnd == .space)
+            for step in 0...3 where !(step == 2 && kept) { room += squeezable(items[i], step: step, atEnd: i == end - 1) }
         }
         return room + 0.01 >= over ? end : nil
     }
@@ -1230,9 +1240,12 @@ public final class STTypesetter {
                         advances[last] -= items[last].style.size / 2
                         given.insert(last)
                     }
-                case .space: break
+                // Full width at the line's end (space-end): none of it given where the line is squeezed.
+                case .space: given.insert(last)
                 }
             }
+            // An opening mark kept full width at the line's start (space-start) likewise.
+            if style.spacingStart == .space, items[0].characterClass.punctuation == .secondHalf { given.insert(0) }
         }
         // Spaces at the end of a line and a line break take no room; a hanging mark stands outside.
         var trailing = items.count
@@ -1252,7 +1265,7 @@ public final class STTypesetter {
         var hanging: CGFloat = 0
         // Only where 、。 hang (hanging-punctuation); elsewhere one at the end was taken in
         // (追い込み) or kept trimmed, and the line is squeezed to hold it.
-        if trailing > 0, style.hangsEnd ?? settings.hangsPunctuation, items[trailing - 1].characterClass.hangs, used > measure + 0.01 {
+        if trailing > 0, hangsEnd(style), items[trailing - 1].characterClass.hangs, used > measure + 0.01 {
             hanging = advances[trailing - 1]
         }
         var content = used - hanging
