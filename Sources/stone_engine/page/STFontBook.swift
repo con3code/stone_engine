@@ -168,7 +168,12 @@ final class STFontBook {
     /// One character shaped in `style`; `vertical` for an upright character of a vertical
     /// line, which takes the font's vertical forms (GSUB vert) where it has them.
     func shape(_ text: String, _ style: STTextStyle, vertical: Bool) -> STShape {
-        let fontKey = key(style, scalar: text.unicodeScalars.first?.value ?? 0x41)
+        let scalar = text.unicodeScalars.first?.value ?? 0x41
+        var fontKey = key(style, scalar: scalar)
+        // A face drawn for vertical lines gives place to its fellow drawn for horizontal ones.
+        if !vertical, scalar >= 0x2E80, let other = settings.horizontalFaces[fontKey.name], exists(other) {
+            fontKey.name = other
+        }
         let shapeKey = ShapeKey(text: text, font: fontKey, vertical: vertical)
         if let shape = shapes[shapeKey] { return shape }
         let base = font(for: fontKey)

@@ -97,4 +97,25 @@ final class STLineBreakTests: XCTestCase {
         // Among Japanese it is a character like another: a line may start with it.
         XCTAssertTrue(lineStarts("あいうえお\u{FFFC}かきく", extent: 100, writingMode: .horizontal).contains(5))
     }
+
+    func testAFaceDrawnForVerticalLinesGivesPlaceToItsFellowOnHorizontalOnes() {
+        var settings = STReaderSettings()
+        settings.horizontalFaces = ["HiraMinProN-W3": "HiraginoSans-W3", "HiraMinProN-W6": "NoSuchFace-W6"]
+        let fonts = STFontBook(settings: settings)
+        var style = STTextStyle()
+        style.family = .mincho
+        func face(_ text: String, _ style: STTextStyle, vertical: Bool) -> String {
+            fonts.shape(text, style, vertical: vertical).glyphs.first.map { CTFontCopyPostScriptName($0.font) as String } ?? ""
+        }
+        XCTAssertEqual(face("あ", style, vertical: true), "HiraMinProN-W3")
+        XCTAssertEqual(face("あ", style, vertical: false), "HiraginoSans-W3")
+        // Latin text is the same in both, and a fellow the system has not is passed over.
+        XCTAssertEqual(face("a", style, vertical: false), "HiraMinProN-W3")
+        style.bold = true
+        XCTAssertEqual(face("あ", style, vertical: false), "HiraMinProN-W6")
+        // Nothing is changed where none is named.
+        style.bold = false
+        let plain = STFontBook(settings: STReaderSettings()).shape("あ", style, vertical: false).glyphs.first.map { CTFontCopyPostScriptName($0.font) as String }
+        XCTAssertEqual(plain, "HiraMinProN-W3")
+    }
 }

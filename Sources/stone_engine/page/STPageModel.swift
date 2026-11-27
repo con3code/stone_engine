@@ -482,6 +482,10 @@ public struct STReaderSettings: Sendable, Hashable {
     public var minchoItalicFonts = ["TimesNewRomanPS-ItalicMT", "TimesNewRomanPS-BoldItalicMT"]
     public var gothicItalicFonts = ["HelveticaNeue-Italic", "HelveticaNeue-BoldItalic"]
     public var monospaceItalicFonts = ["Menlo-Italic", "Menlo-BoldItalic"]
+    /// The face the Japanese characters of a horizontal line are set in, by the face (PostScript
+    /// name) they are set in on a vertical line: for a face drawn in two designs, one for each
+    /// direction (游教科書体 and its 横用). A face the system does not have is passed over.
+    public var horizontalFaces: [String: String] = [:]
     /// The book's own fonts are used where it names them; otherwise its faces are the reader's.
     public var usesBookFonts = true
     /// Every run set in this face whatever the book says (the reader's choice of 明朝 or

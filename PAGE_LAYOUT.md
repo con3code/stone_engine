@@ -74,6 +74,7 @@
 - **行末・行頭を全角に保つ約物は詰めない**: space-end（`spacingEnd == .space`）の行末の終わり括弧・句読点と、space-start の行頭の始め括弧は、行を詰めるとき（追い込み）にも全角のまま。足りない分は行内の約物から取る
 - **段組の高さ（バランス）**: 段を揃える高さを探すとき、行・画像・箱がその高さに収まっていることも条件にする。行は入らない段にも 1 行は置かれるので、行数が段数以下のとき（幅が広くて各段 1 行）に高さがほぼ 0 と求まり、後ろの段抜き（column-span: all）や枠が行に重なっていた
 - **両端揃えと和欧間（読み手の既定）**: 日本語の電子書籍に向けて、本が揃えを指定しないときは両端揃え（`STReaderSettings.justifies`、既定はオン）、和欧間・和数間を指定しないときは四分アキ（`STReaderSettings.autospaces`、既定はオン）にする。オフにすると行頭揃え・ベタ組みになる。本が指定したことは `STBlockStyle.alignGiven`・`autospaceGiven` で示し、そのときは本の指定に従う（中央・行末揃えは指定がなくてもそのまま）。本がハイフンの指定（hyphens）をしていない（`STBlockStyle.hyphensGiven` が偽の）段落は、本が両端揃え（text-align: justify）を指定しているとき欧文の単語をハイフンで分け、欧文の行が単語の間で大きく空かないようにする（`STTypesetter.impliesHyphens`）。読み手の既定で両端揃えにしただけの段落、単語の分け方（word-break・overflow-wrap）を本が指定した段落、大文字だけの語は、この既定では分けない。段落の言語が日本語・中国語・韓国語のように辞書のない言語なら、欧文の単語は英語の辞書で分ける。和欧間の四分は字の送りとは別に持ち（`STItem.autospaceAfter`）、行末では取る。
+- **縦組み用と横組み用に分かれた書体**: `STReaderSettings.horizontalFaces`（既定は空）。縦組みの行で使う書体の PostScript 名から、横組みの行の和文の字（U+2E80 以降）に使う書体の名前を引く。游教科書体（YuKyo-Medium）と横用（YuKyo_Yoko-Medium）のように、組み方向ごとに仮名の形を変えた書体のため。システムにない書体は使わない。欧文の字はそのまま（`STFontBook.shape`）
 - **縦中横（読み手の指定）**: `STReaderSettings.combinesDigits` で、本が指定していない縦組みの半角数字（指定の桁数まで）と !? を縦中横にする。
 - **画像（追加）**: object-fit・object-position、合成モード、不透明度（opacity は文字・背景・画像の透明度として）。
 - **行の高さ**: 1 か所（`STReaderSettings.lineHeight(of:)`）で決める。本が指定した行の高さ（`STBlockStyle.lineHeightGiven`）が `tightLineHeight`（1.5）未満なら、詰めたまま使う（年表・表・見出し）。それ以外は `minimumLineHeight` まで広げる。`followsBookLineHeights` では本の指定をそのまま使い、指定のない行は `normalLineHeight`（1.5）。
