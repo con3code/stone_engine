@@ -816,6 +816,12 @@ public final class STTypesetter {
             if [0x22, 0x27].contains(after.scalar), !opens(index) { return false }
             if [0x22, 0x27].contains(before.scalar), opens(index - 1) { return false }
         }
+        // An image no larger than a character (外字) hard against Latin text, no space between:
+        // a mark of that text drawn as an image (a quotation mark, say), not parted from it.
+        // What it is cannot be told, so it neither starts a line after the text nor ends one
+        // before it.
+        if Self.isCharacterImage(after), Self.isLatinText(before) { return false }
+        if Self.isCharacterImage(before), Self.isLatinText(after) { return false }
         // 分離禁止: the halves of ……, ――, ‥‥ stay together, and of the くの字点 〳〵 and 〴〵.
         if before.scalar == after.scalar, Self.inseparable.contains(before.scalar) { return false }
         if before.scalar == 0x3033 || before.scalar == 0x3034, after.scalar == 0x3035 { return false }
@@ -846,6 +852,15 @@ public final class STTypesetter {
         return before.shape != nil && !before.characterClass.wordLetter
     }
 
+    /// An inline image no larger than a character of the text it stands in: a 外字.
+    private static func isCharacterImage(_ item: STItem) -> Bool {
+        guard case .image(_, let size) = item.kind else { return false }
+        return max(size.width, size.height) <= item.style.size * 1.5
+    }
+    /// A letter, digit or mark of Latin text and the like: set, not a space, and not Japanese.
+    private static func isLatinText(_ item: STItem) -> Bool {
+        item.shape != nil && !item.isSpace && !item.isLineBreak && !item.characterClass.ideographic
+    }
     private static func isDigit(_ scalar: UInt32) -> Bool { (0x30...0x39).contains(scalar) }
     private static func isWideDigit(_ scalar: UInt32) -> Bool { (0xFF10...0xFF19).contains(scalar) }
     private static func isLetter(_ scalar: UInt32) -> Bool {

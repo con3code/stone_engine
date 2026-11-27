@@ -65,4 +65,36 @@ final class STLineBreakTests: XCTestCase {
             XCTAssertTrue(set.contains { $0.contains(mark) }, "「\(mark)」 parted: \(set)")
         }
     }
+
+    /// Where the lines of a paragraph of text and character-sized images (￼ in `text`) start.
+    private func lineStarts(_ text: String, extent: CGFloat, writingMode: STWritingMode) -> [Int] {
+        var style = STTextStyle()
+        style.size = 20
+        let inlines: [STInline] = text.split(separator: "\u{FFFC}", omittingEmptySubsequences: false).enumerated().flatMap { index, part -> [STInline] in
+            (index > 0 ? [.image(id: "mark", size: CGSize(width: 20, height: 20), style: style)] : []) + (part.isEmpty ? [] : [.text(String(part), style)])
+        }
+        let section = STSection(blocks: [STBlock(inlines: inlines, style: STBlockStyle())], writingMode: writingMode)
+        let geometry = writingMode == .horizontal
+            ? STPageGeometry(size: CGSize(width: extent + 40, height: 4000), top: 20, left: 20, bottom: 20, right: 20)
+            : STPageGeometry(size: CGSize(width: 4000, height: extent + 40), top: 20, left: 20, bottom: 20, right: 20)
+        return STTypesetter(settings: STReaderSettings()).paginate(section, geometry: geometry).flatMap(\.lines).map { $0.line.range.lowerBound }
+    }
+
+    func testAMarkDrawnAsAnImageIsNotPartedFromTheLatinTextItStandsAgainst() {
+        // Quotation marks as 外字 images around English among Japanese, as some books have them.
+        let text = "これほど高いものではなかった……\u{FFFC}What do you get when you cross an optic with a mental object? An eye-dea\u{FFFC}（計量ジガーとメンタルなものを交配させたら何ができる？）。"
+        let whole = text as NSString
+        let opening = whole.range(of: "\u{FFFC}").location
+        let closing = whole.range(of: "\u{FFFC}", options: .backwards).location
+        for writingMode in [STWritingMode.vertical, .horizontal] {
+            for extent in stride(from: CGFloat(200), through: 900, by: 7) {
+                let starts = lineStarts(text, extent: extent, writingMode: writingMode)
+                XCTAssertGreaterThan(starts.count, 1)
+                XCTAssertFalse(starts.contains(closing), "the closing mark starts a line, \(extent) long")
+                XCTAssertFalse(starts.contains(opening + 1), "the opening mark ends a line, \(extent) long")
+            }
+        }
+        // Among Japanese it is a character like another: a line may start with it.
+        XCTAssertTrue(lineStarts("あいうえお\u{FFFC}かきく", extent: 100, writingMode: .horizontal).contains(5))
+    }
 }
